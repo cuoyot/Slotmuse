@@ -1,0 +1,13 @@
+.git
+__pycache__
+data
+tests
+dist
+packaging
+*.db
+*.db-*
+*.jpg
+*.zip
+.env
+.env.*
+.railway
