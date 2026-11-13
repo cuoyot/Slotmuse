@@ -112,9 +112,30 @@ class SchoolsAPI(unittest.TestCase):
         self.assertEqual(status,200)
         state=self.state(school)
         self.assertEqual(len(state['data']['sessions']),2)
+        # Una semana ya revisada se conserva; el resto se genera desde temporada.
+        status,_=self.call('season-generate',dict(week=state['week'],revision=state['data']['revision']),school=school)
+        self.assertEqual(status,200)
+        state=self.state(school)
+        self.assertTrue(all(r['planned']==2 for r in state['season_summary'] if '2026-10-05'<=r['week']<='2026-12-14'))
         self.assertEqual(state['user']['role'],'superadmin')
         status,_=self.call('publish',dict(week=state['week'],revision=state['data']['revision']),school=school)
         self.assertEqual(status,200)
+    def test_opening_new_real_school_does_not_create_a_draft(self):
+        self.login();school=self.create();self.state(school)
+        with app.school_db(school) as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM weeks').fetchone()[0],0)
+
+    def test_season_generation_includes_the_current_unplanned_week(self):
+        self.login();school=self.create()
+        self.add(school,'rooms',dict(name='Aula',kind='theory',capacity=60))
+        self.add(school,'groups',dict(name='Grupo',size=48,subgroup_count=2))
+        self.add(school,'subjects',dict(name='Materia',kind='theory',scope='group',start='2026-11-09',end='2026-11-27',blocks=1,color='blue'))
+        sub=self.state(school)['catalog']['subjects'][0]['id']
+        self.add(school,'teachers',dict(name='Docente',subjects=[sub],days=[0,1,2,3,4],max_daily=3,max_weekly=12))
+        state=self.state(school)
+        self.assertEqual(self.call('season-generate',dict(week=state['week'],revision=state['data']['revision']),school=school)[0],200)
+        self.assertEqual(len(self.state(school)['data']['sessions']),1)
+
     def test_incomplete_setup_blocks_generation(self):
         self.login();school=self.create();state=self.state(school)
         self.assertEqual(self.call('generate',dict(week=state['week'],revision=state['data']['revision']),school=school)[0],400)
