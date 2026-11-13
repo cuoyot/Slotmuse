@@ -111,6 +111,8 @@ Con el servicio detenido, copiar **todo** el directorio de datos, incluidas `pla
 python3 -m unittest discover -s tests -v
 node --check static/app.js
 node --check static/platform.js
+node --check static/i18n.js
+node tests/test_i18n.cjs
 ```
 
 Las pruebas abren puertos locales temporales y bases de datos independientes. Cubren restricciones, periodos, publicación, revisiones, autenticación, CSRF, aislamiento de escuelas y arranque del paquete Windows cuando el ZIP está disponible.
@@ -139,3 +141,17 @@ Múltiples cursos por escuela, cuentas para docentes/coordinadores/alumnado, tip
 [MIT](LICENSE). El runtime opcional de Python para Windows conserva su licencia
 original; no se incluye en el repositorio. La literatura y la documentación
 referenciadas conservan sus respectivas licencias.
+
+## Idiomas
+
+La interfaz está disponible en español y catalán. El botón circular con la bandera
+del idioma activo está en el acceso y en la cabecera de la aplicación. La elección
+se recuerda en el navegador; sin preferencia guardada, se usa catalán cuando el
+idioma del navegador es catalán y español en los demás casos. El cambio no recarga
+la página ni borra lo escrito en el formulario de acceso.
+
+`static/ca.json` contiene el catálogo catalán; `static/i18n.js` aplica las traducciones
+a los textos de interfaz y formatea las fechas mediante `Intl`. Los segmentos
+literales de las plantillas están separados de sus valores dinámicos: los nombres
+de escuelas, docentes, materias y otros datos introducidos por el usuario no se
+traducen ni se modifican en la base de datos.
