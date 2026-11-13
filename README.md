@@ -2,7 +2,7 @@
 
 Webapp para preparar temporadas formativas y horarios de una escuela: periodos de materias, grupos y subgrupos, espacios especializados, docentes nominales y reservas por asignar.
 
-La versión 0.2 incorpora **escuelas independientes**, acceso de **superadministrador con usuario y contraseña** y una **guía de configuración inicial**. La Escuela Demo se conserva como entorno separado con datos ficticios y perfiles intercambiables.
+Slotmuse incorpora **escuelas independientes**, acceso con **cuentas y roles por escuela** y una **guía de configuración inicial**. La Escuela Demo se conserva como entorno separado con datos ficticios y perfiles intercambiables.
 
 ## Ejecutar la plataforma
 
@@ -51,7 +51,7 @@ Si existe `data/academia.db` de la versión anterior, el primer arranque de la p
 
 ```text
 data/
-  platform.db          # Superadministrador, sesiones y registro de escuelas
+  platform.db          # Usuarios, roles por escuela, sesiones y escuelas
   schools/
     demo.db            # Escuela Demo
     <id-escuela>.db    # Catálogo y semanas de una escuela independiente
@@ -61,7 +61,7 @@ La selección de base de datos se limita al contexto de cada petición; las peti
 
 Las contraseñas usan PBKDF2-HMAC-SHA256 con sal aleatoria y 600.000 iteraciones. Las sesiones duran 12 horas: token aleatorio, hash en la base de datos, cookie HttpOnly y SameSite=Strict. En Railway la cookie es Secure. Las mutaciones autenticadas requieren token CSRF; se rechazan orígenes cruzados. Tras cinco fallos de acceso se bloquea durante 15 minutos la combinación de usuario e IP de conexión. El cierre de sesión invalida la sesión en el servidor.
 
-No hay recuperación de contraseña ni administración de usuarios en la interfaz de esta versión. Antes de un uso operativo se deben añadir estos flujos, auditoría, políticas de respaldo y las cuentas/permisos del personal real.
+La interfaz permite crear usuarios, editar roles y desactivar su acceso por escuela. La recuperación y el cambio de contraseña todavía no tienen interfaz; quedan pendientes junto con auditoría completa y políticas de respaldo.
 
 ## Planificación
 
