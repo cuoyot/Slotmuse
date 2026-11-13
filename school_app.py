@@ -2,6 +2,7 @@
 """Plataforma de escuelas y autenticación para el planificador."""
 from contextlib import contextmanager
 import datetime as dt
+import copy
 import hashlib
 import hmac
 from http.cookies import SimpleCookie, CookieError
@@ -139,17 +140,16 @@ def period(body):
 
 def readiness(cat):
     issues=[]
-    for key,label in [('groups','grupos'),('rooms','espacios'),('subjects','materias'),('teachers','docentes o reservas')]:
+    for key,label in [('groups','grupos'),('rooms','espacios'),('subjects','materias')]:
         if not cat[key]: issues.append('Añade '+label+'.')
     for sub in cat['subjects']:
-        if not any(sub['id'] in t['subjects'] for t in cat['teachers']): issues.append('Falta un docente habilitado para '+sub['name']+'.')
         if not any(r['kind']==sub['kind'] for r in cat['rooms']): issues.append('Falta un espacio compatible para '+sub['name']+'.')
         for group in cat['groups']:
             size=group['size'] if sub['scope']=='group' else (group['size']+len(group['subgroups'])-1)//len(group['subgroups'])
             if not any(r['kind']==sub['kind'] and r['capacity']>=size for r in cat['rooms']):
                 issues.append(f"Falta aforo para {sub['name']} / {group['name']}.")
     for sub in cat['subjects']:
-        capacity=sum(server.active(sub,w) for w in server.season_weeks(cat))*sub.get('weekly_hours',sub['blocks']*1.5)
+        capacity=sum(server.teaching_week(sub,cat,w) for w in server.season_weeks(cat))*sub.get('weekly_hours',sub['blocks']*1.5)
         if sub.get('total_hours',0)>capacity:issues.append('Las horas totales de '+sub['name']+' no caben en su periodo con la carga semanal indicada.')
     return list(dict.fromkeys(issues))
 
@@ -430,6 +430,8 @@ class Handler(server.Handler):
             if self.current_school['is_demo'] or not self.member or not role_permissions(self.member['role'])['configure']:
                 return self.send_json({'error':'No tienes permisos para esta acción.'},403)
             body=self.read_body();effective=dt.date.fromisoformat(body['from']).isoformat()
+            until=dt.date.fromisoformat(body['until']).isoformat() if body.get('until') else None
+            if until and until<effective:raise ValueError('La fecha de fin debe ser igual o posterior al inicio.')
             windows=body.get('windows')
             if not isinstance(windows,list) or len(windows)>100:raise ValueError('Franjas no válidas.')
             clean=[]
@@ -451,7 +453,18 @@ class Handler(server.Handler):
                 if body.get('catalog_revision')!=cat.get('revision',1):return self.send_json({'error':'El catálogo ha cambiado. Recarga antes de guardar.'},409)
                 room=next((r for r in cat['rooms'] if r['id']==body.get('room')),None)
                 if not room:raise ValueError('Espacio no encontrado.')
-                room['availability']=sorted([v for v in room.get('availability',[]) if v['from']!=effective]+[dict(**{'from':effective},windows=clean)],key=lambda v:v['from'])
+                if room.get('availability_mode')=='periods' and not until:until=max(effective,cat['season']['end'])
+                if until:
+                    periods=[v for v in server.room_periods(room,cat) if v['from']!=body.get('replace_from')]
+                    kept=[]
+                    for v in periods:
+                        if v['until']<effective or v['from']>until:kept.append(v);continue
+                        if v['from']<effective:kept.append({**v,'until':(dt.date.fromisoformat(effective)-dt.timedelta(days=1)).isoformat()})
+                        if v['until']>until:kept.append({**v,'from':(dt.date.fromisoformat(until)+dt.timedelta(days=1)).isoformat()})
+                    room['availability']=sorted(kept+[dict(**{'from':effective},until=until,windows=clean)],key=lambda v:v['from'])
+                    room['availability_mode']='periods'
+                else:
+                    room['availability']=sorted([v for v in room.get('availability',[]) if v['from']!=effective]+[dict(**{'from':effective},windows=clean)],key=lambda v:v['from'])
                 stored=[(w,json.loads(raw)) for w,raw in conn.execute('SELECT week,data FROM weeks ORDER BY week')]
                 preview_token=token_hash(json.dumps(dict(catalog=cat,weeks=stored),sort_keys=True,ensure_ascii=False))
                 if body.get('preview_token') and body['preview_token']!=preview_token:return self.send_json({'error':'La planificación ha cambiado. Vuelve a calcular el impacto.'},409)
@@ -480,7 +493,7 @@ class Handler(server.Handler):
     def edit_catalog(self):
         try:
             body=self.read_body();collection=body.get('collection')
-            if collection not in ['space_types','locations','rooms','groups','subjects','teachers']:raise ValueError('Concepto no válido.')
+            if collection not in ['non_teaching_days','space_types','locations','rooms','groups','subjects','teachers']:raise ValueError('Concepto no válido.')
             items=body.get('items',[body.get('item')])
             if not isinstance(items,list) or not 1<=len(items)<=100 or any(not isinstance(i,dict) for i in items):raise ValueError('Indica entre 1 y 100 filas válidas.')
             with server.connect() as conn:
@@ -488,11 +501,15 @@ class Handler(server.Handler):
                 cat=server.get_catalog(conn)
                 if body.get('catalog_revision')!=cat.get('revision',1):
                     return self.send_json({'error':'El catálogo ha cambiado. Recarga antes de guardar.'},409)
+                prior_cat=copy.deepcopy(cat);missing_total=0;repaired=0
                 prior_errors={w:server.validate(json.loads(raw)['sessions'],cat,w) for w,raw in conn.execute('SELECT week,data FROM weeks')}
                 for row_number,item in enumerate(items,1):
                     existing=next((x for x in cat[collection] if x['id']==item.get('id')),None)
                     if item.get('id') and not existing:raise ValueError('Concepto no encontrado.')
                     clean=dict(id=existing['id'] if existing else secrets.token_hex(6),name=text(item.get('name'),'Nombre'))
+                    if collection=='non_teaching_days':
+                        clean.update(**period(item),enabled=item.get('enabled',True))
+                        if type(clean['enabled']) is not bool:raise ValueError('Estado no válido.')
                     if collection in ['locations','space_types']:
                         if any(x['name'].strip().casefold()==clean['name'].casefold() and x['id']!=clean['id'] for x in cat[collection]):raise ValueError('Ya existe un elemento con ese nombre.')
                         if collection=='space_types':clean['builtin']=existing.get('builtin',False) if existing else False
@@ -503,7 +520,9 @@ class Handler(server.Handler):
                         clean['capacity']=number(item.get('capacity'),'Aforo')
                         clean['location_id']=item.get('location_id',existing.get('location_id','main') if existing else 'main')
                         if clean['location_id'] not in [location['id'] for location in cat['locations']]:raise ValueError('Selecciona una ubicación de esta escuela.')
-                        if existing and 'availability' in existing:clean['availability']=existing['availability']
+                        if existing and 'availability' in existing:
+                            clean['availability']=existing['availability']
+                            if 'availability_mode' in existing:clean['availability_mode']=existing['availability_mode']
                     elif collection=='groups':
                         clean['size']=number(item.get('size'),'Alumnos')
                         count=number(item.get('subgroup_count'),'Subgrupos',2,20)
@@ -518,19 +537,26 @@ class Handler(server.Handler):
                         if clean['color'] not in COLORS:raise ValueError('Color no válido.')
                     elif collection=='teachers':
                         subjects=item.get('subjects');days=item.get('days')
-                        if not isinstance(subjects,list) or not subjects or any(s not in [x['id'] for x in cat['subjects']] for s in subjects):raise ValueError('Selecciona materias habilitadas de esta escuela.')
+                        if not isinstance(subjects,list) or any(s not in [x['id'] for x in cat['subjects']] for s in subjects):raise ValueError('Selecciona materias habilitadas de esta escuela.')
                         if not isinstance(days,list) or not days or any(type(d) is not int or d not in range(5) for d in days):raise ValueError('Selecciona días disponibles válidos.')
-                        clean.update(subjects=list(dict.fromkeys(subjects)),days=list(dict.fromkeys(days)),placeholder=bool(item.get('placeholder')),max_daily=number(item.get('max_daily'),'Carga diaria',1,4),max_weekly=number(item.get('max_weekly'),'Carga semanal',1,20))
+                        clean.update(subjects=list(dict.fromkeys(subjects)),days=list(dict.fromkeys(days)),placeholder=bool(item.get('placeholder')),max_daily=number(item.get('max_daily'),'Carga diaria',1,14),max_weekly=number(item.get('max_weekly'),'Carga semanal',1,70))
                     if existing:
                         with platform_db() as auth:
                             bindings=auth.execute('SELECT role,subgroup,teacher_id FROM memberships WHERE school_id=?',(self.current_school['id'],)).fetchall()
                         if collection=='groups' and any(b['subgroup'] in existing['subgroups'] and b['subgroup'] not in clean['subgroups'] for b in bindings):raise ValueError('Reasigna primero los usuarios de los subgrupos afectados.')
                         if collection=='teachers' and clean['placeholder'] and any(b['teacher_id']==clean['id'] for b in bindings):raise ValueError('Un docente vinculado a una cuenta no puede convertirse en reserva.')
                     cat[collection]=[x for x in cat[collection] if x['id']!=clean['id']]+[clean]
+                server.ensure_pending_teachers(cat)
                 cat['revision']=cat.get('revision',1)+1
                 # No invalidar silenciosamente semanas ya configuradas.
-                for week,raw in conn.execute('SELECT week,data FROM weeks'):
+                for week,raw in conn.execute('SELECT week,data FROM weeks').fetchall():
                     stored=json.loads(raw)
+                    if collection=='non_teaching_days' and (server.room_conflicts(stored['sessions'],cat,week) or server.coverage(stored['sessions'],cat,week)!=server.coverage(stored['sessions'],prior_cat,week)):
+                        stored['sessions'],remaining=server.repair_sessions(stored,cat,week)
+                        stored['missing']=remaining;missing_total+=len(remaining);repaired+=1
+                        stored['revision']+=1;stored['updated']=dt.datetime.now().isoformat(timespec='seconds')
+                        stored['history'].insert(0,dict(at=stored['updated'],user=self.member['name'],message='Calendario escolar: borrador reajustado'))
+                        conn.execute('UPDATE weeks SET data=? WHERE week=?',(json.dumps(stored,ensure_ascii=False),week))
                     errors=server.validate(stored['sessions'],cat,week)
                     previous=list(prior_errors.get(week,[]))
                     introduced=[]
@@ -540,7 +566,7 @@ class Handler(server.Handler):
                     errors=introduced
                     if errors:raise ValueError('El cambio afecta a sesiones existentes. Ajusta primero esas sesiones. '+errors[0])
                 conn.execute('UPDATE settings SET data=? WHERE id=1',(json.dumps(cat,ensure_ascii=False),))
-            return self.send_json({'ok':True,'message':'Configuración de la escuela guardada.'})
+            return self.send_json({'ok':True,'message':'Configuración de la escuela guardada.','missing':missing_total,'repaired':repaired})
         except (ValueError,KeyError,TypeError,StopIteration) as error:return self.send_json({'error':str(error) or 'Datos no válidos.'},400)
 
 
