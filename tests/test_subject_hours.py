@@ -13,7 +13,7 @@ class SubjectHours(unittest.TestCase):
         self.assertEqual(sum(len(server.requirements(cat,w)) for w in server.season_weeks(cat)),10)
     def test_hours_validation(self):
         cat=self.catalog()
-        for total,weekly in [(0,3),(2,3),(3,2),(True,3),(3,float('inf'))]:
+        for total,weekly in [(0,3),(2.25,3),(3,2.25),(True,3),(3,float('inf'))]:
             with self.assertRaises(ValueError):server.subject_hours(dict(total_hours=total,weekly_hours=weekly),cat)
         self.assertEqual(server.subject_hours(dict(total_hours=7.5,weekly_hours=3),cat)['blocks'],2)
     def test_outside_period_and_each_subgroup_receives_total(self):
