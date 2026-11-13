@@ -63,6 +63,7 @@ def get_catalog(conn):
                     session['slot']=(session['start_minute']-480)//30
             conn.execute('UPDATE weeks SET data=? WHERE week=?',(json.dumps(data,ensure_ascii=False),week))
         cat['time_grid_version']=2
+    cat.setdefault('space_types',[dict(id=id,name=name,builtin=True) for id,name in [('theory','Aula de teoría'),('tatami','Defensa personal'),('pool','Salvamento acuático'),('outdoor','Preparación física')]])
     cat.setdefault('locations',[dict(id='main',name='Campus principal')])
     for room in cat['rooms']:room.setdefault('location_id','main')
     for subject in cat['subjects']:
