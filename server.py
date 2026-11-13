@@ -21,7 +21,10 @@ CURRENT_DB = ContextVar('school_database', default=None)
 def database_path():
     return CURRENT_DB.get() or DB
 
-SLOTS = ['08:00–09:30', '09:45–11:15', '11:45–13:15', '13:30–15:00']
+def clock_text(minutes):return f'{minutes//60:02d}:{minutes%60:02d}'
+
+SLOTS = [clock_text(480+i*30)+'–'+clock_text(510+i*30) for i in range(14)]
+LEGACY_STARTS=[480,585,705,810]
 USERS = [dict(id='manager', name='Elena Martín', role='manager', label='Gestora de horarios'), dict(id='coordinator', name='Carlos Ruiz', role='coordinator', label='Coordinador docente'), dict(id='student-a1', name='Lucía Torres', role='student', label='Alumna · Alfa / A1', subgroup='A1'), dict(id='student-b2', name='Pablo García', role='student', label='Alumno · Bravo / B2', subgroup='B2')]
 
 def catalogue():
@@ -49,10 +52,24 @@ def get_catalog(conn):
     original=copy.deepcopy(cat)
     # Compatibilidad con las bases de datos iniciales de la demo.
     cat.setdefault('season',dict(name='Promoción 2026 / 2027',start='2026-09-14',end='2027-06-25'))
+    if cat.get('time_grid_version')!=2:
+        for week,raw in conn.execute('SELECT week,data FROM weeks').fetchall():
+            data=json.loads(raw)
+            for sessions in [data['sessions'],(data.get('published') or {}).get('sessions',[])]:
+                for session in sessions:
+                    session.setdefault('start_minute',LEGACY_STARTS[session['slot']])
+                    session.setdefault('duration_minutes',90)
+                    if session['start_minute']%30:session['legacy_time']=True
+                    session['slot']=(session['start_minute']-480)//30
+            conn.execute('UPDATE weeks SET data=? WHERE week=?',(json.dumps(data,ensure_ascii=False),week))
+        cat['time_grid_version']=2
+    cat.setdefault('locations',[dict(id='main',name='Campus principal')])
+    for room in cat['rooms']:room.setdefault('location_id','main')
     for subject in cat['subjects']:
         subject.setdefault('start','2026-09-14')
         subject.setdefault('end', {'law':'2027-01-29','procedure':'2027-03-26','swim':'2026-12-18'}.get(subject['id'],'2027-06-25'))
     for subject in cat['subjects']:
+        subject.setdefault('session_minutes',90)
         subject.setdefault('weekly_hours',subject['blocks']*1.5)
         subject.setdefault('total_hours',sum(active(subject,w) for w in season_weeks(cat))*subject['weekly_hours'])
     if cat!=original:conn.execute('UPDATE settings SET data=? WHERE id=1',(json.dumps(cat,ensure_ascii=False),))
@@ -91,7 +108,33 @@ def participants(session, cat):
         if session['audience'] in group['subgroups']: return {session['audience']}
     raise ValueError('Grupo o subgrupo desconocido.')
 
-def validate(sessions, cat, week=None):
+def room_available(room,week,day,slot,duration=90,start_minute=None):
+    if not week:return True
+    date=(dt.date.fromisoformat(week)+dt.timedelta(days=day)).isoformat()
+    versions=[v for v in room.get('availability',[]) if v['from']<=date]
+    if not versions:return True  # Compatibilidad: disponibilidad completa antes de la primera regla.
+    version=max(versions,key=lambda v:v['from'])
+    start_minute=480+slot*30 if start_minute is None else start_minute
+    start,end=clock_text(start_minute),clock_text(start_minute+duration)
+    return any(w['day']==day and w['start']<=start and w['end']>=end for w in version['windows'])
+
+
+def room_conflicts(sessions,cat,week):
+    rooms={r['id']:r for r in cat['rooms']}
+    bad=[s for s in sessions if s['room'] in rooms and not room_available(rooms[s['room']],week,s['day'],s['slot'],session_duration(s,cat),session_start(s))]
+    splits={s['split_id'] for s in bad if s.get('split_id')}
+    return [s for s in sessions if s in bad or s.get('split_id') in splits]
+
+
+def session_start(session):return session.get('start_minute',480+session['slot']*30)
+
+
+def session_duration(session,cat=None):
+    subject=next((x for x in (cat or {}).get('subjects',[]) if x['id']==session.get('subject')),None)
+    return session.get('duration_minutes',(subject or {}).get('session_minutes',90))
+
+
+def validate(sessions, cat, week=None,allow_partial=False):
     errors=[]
     for index,s in enumerate(sessions):
         tag=f"Sesión {index+1}"
@@ -100,8 +143,13 @@ def validate(sessions, cat, week=None):
         teacher=next((x for x in cat['teachers'] if x['id']==s.get('teacher')),None)
         if not subject or not room or not teacher:
             errors.append(f'{tag}: asignatura, espacio o docente no válido.'); continue
-        if type(s.get('day')) is not int or s['day'] not in range(5) or type(s.get('slot')) is not int or s['slot'] not in range(4):
+        if type(s.get('day')) is not int or s['day'] not in range(5) or type(s.get('slot')) is not int or s['slot'] not in range(len(SLOTS)):
             errors.append(f'{tag}: franja no válida.'); continue
+        duration=session_duration(s,cat);start=session_start(s);end=start+duration
+        if type(duration) is not int or duration<30 or duration>420 or duration%30 or type(start) is not int or not 480<=start<900 or end>900:
+            errors.append(f'{tag}: duración o inicio no válido.');continue
+        if 'start_minute' in s and start%30 and not s.get('legacy_time'):
+            errors.append(f'{tag}: el inicio debe ajustarse a intervalos de 30 minutos.');continue
         try: people=participants(s,cat)
         except ValueError as exc: errors.append(str(exc)); continue
         group=next(g for g in cat['groups'] if people <= set(g['subgroups']))
@@ -109,104 +157,158 @@ def validate(sessions, cat, week=None):
         if week and not active(subject,week,s['day']): errors.append(f'{tag}: materia fuera de su periodo de impartición.')
         if subject['scope']=='subgroup' and len(people)!=1: errors.append(f'{tag}: la práctica requiere un subgrupo.')
         if subject['scope']=='group' and len(people)!=len(group['subgroups']): errors.append(f'{tag}: la teoría requiere el grupo completo.')
+        if not room_available(room,week,s['day'],s['slot'],duration,start):errors.append(f'{tag}: espacio fuera de su disponibilidad horaria.')
         if room['kind']!=subject['kind'] or room['capacity']<size: errors.append(f'{tag}: espacio incompatible o aforo insuficiente.')
         if subject['id'] not in teacher['subjects']: errors.append(f'{tag}: docente sin habilitación para esta materia.')
         if s['day'] not in teacher['days']: errors.append(f'{tag}: docente no disponible este día.')
         same=[x for x in sessions if x.get('teacher')==teacher['id']]
         if len(same)>teacher['max_weekly'] or sum(x.get('day')==s['day'] for x in same)>teacher['max_daily']: errors.append(f'{tag}: carga docente excedida.')
         for other in sessions[:index]:
-            if (s['day'],s['slot'])!=(other.get('day'),other.get('slot')): continue
-            if s['room']==other.get('room'): errors.append(f'{tag}: el espacio ya está ocupado.')
-            if s['teacher']==other.get('teacher'): errors.append(f'{tag}: el docente tiene otra sesión simultánea.')
-            try:
-                if people & participants(other,cat): errors.append(f'{tag}: cruce de alumnos (grupo/subgrupo).')
-            except ValueError: pass
+            if s['day']!=other.get('day') or type(other.get('slot')) is not int:continue
+            other_room=next((r for r in cat['rooms'] if r['id']==other.get('room')),None)
+            other_start=session_start(other);other_end=other_start+session_duration(other,cat)
+            try:shared=bool(people & participants(other,cat))
+            except ValueError:shared=False
+            overlap=start<other_end and other_start<end
+            if overlap:
+                if s['room']==other.get('room'):errors.append(f'{tag}: el espacio ya está ocupado.')
+                if s['teacher']==other.get('teacher'):errors.append(f'{tag}: el docente tiene otra sesión simultánea.')
+                if shared:errors.append(f'{tag}: cruce de alumnos (grupo/subgrupo).')
+            elif other_room and room.get('location_id','main')!=other_room.get('location_id','main'):
+                gap=max(start,other_start)-min(end,other_end)
+                if gap<30 and (shared or s['teacher']==other.get('teacher')):
+                    errors.append(f'{tag}: se necesitan 30 minutos para desplazarse entre ubicaciones.')
+    bundles={}
+    for session in sessions:
+        if session.get('split_id'):bundles.setdefault(session['split_id'],[]).append(session)
+    for bundle in bundles.values():
+        if not allow_partial and len(bundle)!=bundle[0].get('split_size',2):errors.append('Desdoblamiento incompleto: reajusta el bloque completo.')
+        stamps={(s['day'],session_start(s),session_duration(s,cat)) for s in bundle}
+        locations={next((r.get('location_id','main') for r in cat['rooms'] if r['id']==s['room']),None) for s in bundle}
+        if len(stamps)>1 or len(locations)>1:errors.append('El desdoblamiento debe compartir día, horario y ubicación.')
     if week:
         for sub in cat['subjects']:
             if 'total_hours' not in sub:continue
-            quota=subject_blocks(sub,cat,week)
+            quota=subject_week_minutes(sub,cat,week)
             for group in cat['groups']:
                 for audience in ([group['id']] if sub['scope']=='group' else group['subgroups']):
-                    if sum(s['subject']==sub['id'] and s['audience']==audience for s in sessions)>quota:
+                    if sum(session_duration(s,cat) for s in sessions if s['subject']==sub['id'] and s['audience']==audience)>quota:
                         errors.append(sub['name']+': se supera la carga horaria prevista para esta semana.')
     return list(dict.fromkeys(errors))
 
 def subject_hours(item,cat=None):
-    """Horas por alumno; las sesiones actuales tienen una duración fija de 90 min."""
-    weekly=item.get('weekly_hours',item.get('blocks',1)*1.5)
-    total=item.get('total_hours')
+    weekly=item.get('weekly_hours',item.get('blocks',1)*1.5);total=item.get('total_hours')
+    duration=item.get('session_minutes',90)
+    if type(duration) is not int or not 30<=duration<=420 or duration%30:
+        raise ValueError('La duración debe ser un múltiplo de 30 minutos, entre 30 y 420.')
     for value,label in [(weekly,'Horas semanales'),(total,'Horas totales')]:
         if value is None and label=='Horas totales':continue
-        if type(value) not in (int,float) or not 0<value<=10000 or abs(value/1.5-round(value/1.5))>1e-8:
-            raise ValueError(label+': indica un múltiplo positivo de 1,5 horas (sesiones de 90 minutos).')
-    if weekly>15:raise ValueError('Las horas semanales no pueden superar 15 horas.')
-    if total is None:
-        total=sum(active(item,w) for w in season_weeks(cat))*weekly if cat else weekly
+        if type(value) not in (int,float) or not 0<value<=10000 or abs(value*2-round(value*2))>1e-8:
+            raise ValueError(label+': indica un múltiplo positivo de 0,5 horas.')
+    if weekly>35:raise ValueError('Las horas semanales no pueden superar 35 horas.')
+    if total is None:total=sum(active(item,w) for w in season_weeks(cat))*weekly if cat else weekly
     if total<=0:raise ValueError('El periodo debe incluir al menos una semana de formación.')
-    return dict(weekly_hours=weekly,total_hours=total,blocks=round(weekly/1.5))
+    return dict(weekly_hours=weekly,total_hours=total,session_minutes=duration,blocks=(round(weekly*60)+duration-1)//duration)
+
+
+def subject_week_minutes(subject,cat,week=None):
+    weekly=round(subject.get('weekly_hours',subject.get('blocks',1)*1.5)*60)
+    if week and not active(subject,week):return 0
+    if 'total_hours' not in subject or week is None:return weekly
+    weeks=[w for w in season_weeks(cat) if active(subject,w)]
+    if week not in weeks:return 0
+    return max(0,min(weekly,round(subject['total_hours']*60)-weeks.index(week)*weekly))
+
+
+def split_minutes(minutes,duration):
+    return [duration]*(minutes//duration)+([minutes%duration] if minutes%duration else [])
 
 
 def subject_blocks(subject,cat,week=None):
-    weekly=round(subject.get('weekly_hours',subject['blocks']*1.5)/1.5)
-    if week and not active(subject,week):return 0
-    if 'total_hours' not in subject:return weekly
-    weeks=[w for w in season_weeks(cat) if active(subject,w)]
-    if week is None:return weekly
-    if week not in weeks:return 0
-    remaining=round(subject['total_hours']/1.5)-weeks.index(week)*weekly
-    return max(0,min(weekly,remaining))
+    return len(split_minutes(subject_week_minutes(subject,cat,week),subject.get('session_minutes',90)))
 
 
-def requirements(cat,week=None):
-    result=[]
+def coverage_tasks(sessions,cat,week=None):
+    tasks=[]
     for subject in cat['subjects']:
-        if week and not active(subject,week): continue
+        quota=subject_week_minutes(subject,cat,week)
         for group in cat['groups']:
             for audience in ([group['id']] if subject['scope']=='group' else group['subgroups']):
-                for _ in range(subject_blocks(subject,cat,week)): result.append((subject['id'],audience))
-    return result
+                done=sum(session_duration(s,cat) for s in sessions if s['subject']==subject['id'] and s['audience']==audience)
+                tasks.extend((subject['id'],audience,duration) for duration in split_minutes(max(0,quota-done),subject.get('session_minutes',90)))
+    return tasks
 
-def coverage(sessions,cat,week=None):
-    pending=requirements(cat,week)
-    for s in sessions:
-        pair=(s['subject'],s['audience'])
-        if pair in pending: pending.remove(pair)
-    return pending
+
+def requirements(cat,week=None):return [(s,a) for s,a,_ in coverage_tasks([],cat,week)]
+
+
+def coverage(sessions,cat,week=None):return [(s,a) for s,a,_ in coverage_tasks(sessions,cat,week)]
+
+def rotation_packs(tasks,cat):
+    """Emparejar componentes técnicos de un grupo en una ubicación compartida."""
+    remaining=list(tasks);packs=[]
+    def group_of(audience):return next((g for g in cat['groups'] if audience in g['subgroups']),None)
+    def locations(task):
+        sub=next(s for s in cat['subjects'] if s['id']==task[0]);group=group_of(task[1])
+        if sub['scope']!='subgroup' or not group or sub.get('align_splits',True) is False:return set()
+        size=(group['size']+len(group['subgroups'])-1)//len(group['subgroups'])
+        return {r.get('location_id','main') for r in cat['rooms'] if r['kind']==sub['kind'] and r['capacity']>=size}
+    while remaining:
+        first=remaining.pop(0);group=group_of(first[1]);common=locations(first);pack=[first]
+        if common and group:
+            for audience in group['subgroups']:
+                if audience==first[1]:continue
+                partner=next((t for t in remaining if t[1]==audience and t[0] not in [p[0] for p in pack] and t[2]==first[2] and common & locations(t)),None)
+                if partner:
+                    remaining.remove(partner);pack.append(partner);common &= locations(partner)
+        # Solo un bloque que cubra todos los subgrupos se presenta como desdoblamiento.
+        if group and len(pack)>1 and len(pack)!=len(group['subgroups']):
+            remaining.extend(pack[1:]);pack=pack[:1]
+        packs.append((pack,common if len(pack)>1 else None))
+    return packs
+
 
 def generate(cat, existing=None, seed=1, week=None):
     locked=[copy.deepcopy(s) for s in (existing or []) if s.get('locked')]
-    if validate(locked,cat,week): raise ValueError('Las sesiones fijadas contienen conflictos.')
-    tasks=coverage(locked,cat,week)
-    rng=random.Random(seed)
-    best=None
+    if validate(locked,cat,week):raise ValueError('Las sesiones fijadas contienen conflictos.')
+    tasks=coverage_tasks(locked,cat,week);rng=random.Random(seed);best=None
+    packs=rotation_packs(tasks,cat)
     for attempt in range(40):
-        sessions=copy.deepcopy(locked)
-        ordered=list(tasks)
-        rng.shuffle(ordered)
-        # Los espacios técnicos de capacidad limitada se resuelven primero.
-        ordered.sort(key=lambda p: next(s for s in cat['subjects'] if s['id']==p[0])['kind']=='theory')
+        sessions=copy.deepcopy(locked);ordered=list(packs);rng.shuffle(ordered)
+        ordered.sort(key=lambda p:(len(p[0])==1,next(s for s in cat['subjects'] if s['id']==p[0][0][0])['kind']=='theory'))
         missing=[]
-        for subject_id,audience in ordered:
-            subject=next(s for s in cat['subjects'] if s['id']==subject_id)
-            candidates=[]
+        for pack,locations in ordered:
+            candidates=[];split_id='split-'+os.urandom(6).hex() if len(pack)>1 else None
             for day in range(5):
-                for slot in range(4):
-                    for room in cat['rooms']:
-                        if room['kind']!=subject['kind']: continue
-                        for teacher in cat['teachers']:
-                            if subject_id not in teacher['subjects']: continue
-                            item=dict(id='s-'+os.urandom(6).hex(),subject=subject_id,audience=audience,day=day,slot=slot,room=room['id'],teacher=teacher['id'],locked=False)
-                            if validate(sessions+[item],cat,week): continue
-                            people=participants(item,cat)
+                for slot in range(len(SLOTS)):
+                    for location in sorted(locations or {None},key=str):
+                        def place(index,placed):
+                            if index==len(pack):return placed
+                            subject_id,audience,duration=pack[index];subject=next(s for s in cat['subjects'] if s['id']==subject_id)
+                            teachers=sorted(cat['teachers'],key=lambda t:t['placeholder'])
+                            for room in cat['rooms']:
+                                if room['kind']!=subject['kind'] or (location is not None and room.get('location_id','main')!=location) or not room_available(room,week,day,slot,duration):continue
+                                for teacher in teachers:
+                                    if subject_id not in teacher['subjects']:continue
+                                    item=dict(id='s-'+os.urandom(6).hex(),subject=subject_id,audience=audience,day=day,slot=slot,start_minute=480+slot*30,duration_minutes=duration,room=room['id'],teacher=teacher['id'],locked=False)
+                                    if split_id:item.update(split_id=split_id,split_size=len(pack))
+                                    if validate(sessions+placed+[item],cat,week,allow_partial=True):continue
+                                    result=place(index+1,placed+[item])
+                                    if result is not None:return result
+                            return None
+                        placed=place(0,[])
+                        if placed:
+                            people=set().union(*(participants(s,cat) for s in placed))
                             daily=[s for s in sessions if s['day']==day and people & participants(s,cat)]
-                            repeated=sum(s['subject']==subject_id for s in daily)
-                            score=len(daily)*3+repeated*9+slot*.25+(2 if teacher['placeholder'] else 0)+rng.random()*2
-                            candidates.append((score,item))
-            if candidates: sessions.append(min(candidates,key=lambda x:x[0])[1])
-            else: missing.append((subject_id,audience))
-        if best is None or len(missing)<len(best[1]): best=(sessions,missing)
-        if not missing: break
+                            repeated=sum(s['subject'] in {p[0] for p in pack} for s in daily)
+                            score=len(daily)*3+repeated*9+slot*.25+sum(2 for s in placed if next(t for t in cat['teachers'] if t['id']==s['teacher'])['placeholder'])+rng.random()*2
+                            candidates.append((score,placed))
+            if candidates:sessions.extend(min(candidates,key=lambda x:x[0])[1])
+            else:missing.extend((subject,audience) for subject,audience,_ in pack)
+        if best is None or len(missing)<len(best[1]):best=(sessions,missing)
+        if not missing:break
     return best
+
 
 def new_week(cat,week):
     sessions,missing=generate(cat,week=week)
@@ -281,12 +383,24 @@ class Handler(SimpleHTTPRequestHandler):
                 elif user['role']!='manager': return self.send_json({'error':'Solo la gestora puede editar o publicar la planificación.'},403)
                 elif action=='/api/save':
                     session=body['session']
-                    clean={key:session.get(key) for key in ['id','subject','audience','day','slot','room','teacher','locked']}
+                    session.setdefault('duration_minutes',next((s.get('session_minutes',90) for s in cat['subjects'] if s['id']==session.get('subject')),90))
+                    clean={key:session.get(key) for key in ['id','subject','audience','day','slot','room','teacher','locked','duration_minutes']}
+                    previous=next((s for s in data['sessions'] if s['id']==clean['id']),None)
+                    if previous and previous.get('split_id'):
+                        clean.update(split_id=previous['split_id'],split_size=previous['split_size'])
+                        for peer in data['sessions']:
+                            if peer.get('split_id')==previous['split_id'] and peer['id']!=previous['id']:
+                                peer.update(day=clean['day'],slot=clean['slot'],duration_minutes=clean['duration_minutes'],start_minute=480+clean['slot']*30)
+                                peer.pop('legacy_time',None)
+                    if previous and previous.get('legacy_time') and clean['slot']==previous['slot']:
+                        clean.update(start_minute=previous['start_minute'],legacy_time=True)
                     if not clean['id']: clean['id']='s-'+os.urandom(6).hex()
                     data['sessions']=[s for s in data['sessions'] if s['id']!=clean['id']]+[clean]
                     message='Sesión guardada'
                 elif action=='/api/delete':
-                    data['sessions']=[s for s in data['sessions'] if s['id']!=body['id']]; message='Sesión eliminada'
+                    target=next((s for s in data['sessions'] if s['id']==body['id']),None)
+                    split=target.get('split_id') if target else None
+                    data['sessions']=[s for s in data['sessions'] if s['id']!=body['id'] and (not split or s.get('split_id')!=split)]; message='Desdoblamiento eliminado' if split else 'Sesión eliminada'
                 elif action=='/api/generate':
                     data['sessions'],data['missing']=generate(cat,data['sessions'],seed=data['revision'],week=week); message='Borrador regenerado; sesiones fijadas conservadas'
                 elif action=='/api/publish':
@@ -329,16 +443,19 @@ class Handler(SimpleHTTPRequestHandler):
                     removed=0
                     for other_week,raw in conn.execute('SELECT week,data FROM weeks').fetchall():
                         other=data if other_week==week else json.loads(raw)
+                        original_sessions=json.dumps(other['sessions'],sort_keys=True)
                         kept=[s for s in other['sessions'] if s['subject']!=sub['id'] or active(sub,other_week,s['day'])]
-                        quota=subject_blocks(sub,cat,other_week);counts={};trimmed=[]
+                        quota=subject_week_minutes(sub,cat,other_week);counts={};trimmed=[]
                         for session in kept:
                             if session['subject']==sub['id']:
-                                audience=session['audience'];counts[audience]=counts.get(audience,0)+1
-                                if counts[audience]>quota:continue
+                                audience=session['audience'];remaining=quota-counts.get(audience,0)
+                                if remaining<=0:continue
+                                session['duration_minutes']=min(session_duration(session,cat),remaining)
+                                counts[audience]=counts.get(audience,0)+session['duration_minutes']
                             trimmed.append(session)
                         kept=trimmed
                         count=len(other['sessions'])-len(kept); removed+=count
-                        if count:
+                        if count or original_sessions!=json.dumps(kept,sort_keys=True):
                             other['sessions']=kept
                             if other_week!=week:
                                 other['revision']+=1
