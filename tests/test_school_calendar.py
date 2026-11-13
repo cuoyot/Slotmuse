@@ -46,6 +46,18 @@ class SchoolCalendarAPI(unittest.TestCase):
         room=self.state(self.school)['catalog']['rooms'][0];self.assertEqual(room['availability_mode'],'periods')
         self.assertEqual(room['availability'][0]['until'],'2026-11-20')
         self.assertFalse(server.room_available(room,'2026-11-23',0,0,60))
+    def test_course_configuration_accepts_summer_break_ranges(self):
+        self.prepare();state=self.state(self.school)
+        status,result=self.call('season',dict(week=state['week'],revision=state['data']['revision'],name='Curso',start='2026-09-14',end='2027-06-25',non_teaching_days=[dict(name='Periodo estival',start='2027-06-01',end='2027-06-25',enabled=True)]),school=self.school)
+        self.assertEqual(status,200,result)
+        saved=self.state(self.school)['catalog']['non_teaching_days'][0]
+        self.assertEqual(saved['name'],'Periodo estival');self.assertEqual(saved['end'],'2027-06-25')
+    def test_week_view_is_limited_to_course_dates(self):
+        self.prepare();before=self.call('state?week=2020-01-06',school=self.school)[1]
+        self.assertEqual(before['week'],'2026-09-14')
+        after=self.call('state?week=2030-01-07',school=self.school)[1]
+        self.assertEqual(after['week'],'2027-06-21')
+
     def test_teachers_can_have_no_subject_yet_and_later_receive_specific_ids(self):
         self.prepare();self.assertEqual(self.add(self.school,'teachers',dict(name='Juan',subjects=[],days=[0,2],placeholder=False,max_daily=4,max_weekly=20))[0],200)
         state=self.state(self.school);teacher=next(t for t in state['catalog']['teachers'] if t['name']=='Juan')
