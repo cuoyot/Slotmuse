@@ -2,7 +2,7 @@
 
 Webapp para preparar temporadas formativas y horarios de una escuela: periodos de materias, grupos y subgrupos, espacios especializados, docentes nominales y reservas por asignar.
 
-La versión 0.2 incorpora **escuelas independientes**, acceso de **superadministrador con usuario y contraseña** y una **guía de configuración inicial**. La Escuela Demo se conserva como entorno separado con datos ficticios y perfiles intercambiables.
+Slotmuse incorpora **escuelas independientes**, acceso con **cuentas y roles por escuela** y una **guía de configuración inicial**. La Escuela Demo se conserva como entorno separado con datos ficticios y perfiles intercambiables.
 
 ## Ejecutar la plataforma
 
@@ -51,7 +51,7 @@ Si existe `data/academia.db` de la versión anterior, el primer arranque de la p
 
 ```text
 data/
-  platform.db          # Superadministrador, sesiones y registro de escuelas
+  platform.db          # Usuarios, roles por escuela, sesiones y escuelas
   schools/
     demo.db            # Escuela Demo
     <id-escuela>.db    # Catálogo y semanas de una escuela independiente
@@ -61,7 +61,7 @@ La selección de base de datos se limita al contexto de cada petición; las peti
 
 Las contraseñas usan PBKDF2-HMAC-SHA256 con sal aleatoria y 600.000 iteraciones. Las sesiones duran 12 horas: token aleatorio, hash en la base de datos, cookie HttpOnly y SameSite=Strict. En Railway la cookie es Secure. Las mutaciones autenticadas requieren token CSRF; se rechazan orígenes cruzados. Tras cinco fallos de acceso se bloquea durante 15 minutos la combinación de usuario e IP de conexión. El cierre de sesión invalida la sesión en el servidor.
 
-No hay recuperación de contraseña ni administración de usuarios en la interfaz de esta versión. Antes de un uso operativo se deben añadir estos flujos, auditoría, políticas de respaldo y las cuentas/permisos del personal real.
+La interfaz permite crear usuarios, editar roles y desactivar su acceso por escuela. La recuperación y el cambio de contraseña todavía no tienen interfaz; quedan pendientes junto con auditoría completa y políticas de respaldo.
 
 ## Planificación
 
@@ -155,3 +155,14 @@ a los textos de interfaz y formatea las fechas mediante `Intl`. Los segmentos
 literales de las plantillas están separados de sus valores dinámicos: los nombres
 de escuelas, docentes, materias y otros datos introducidos por el usuario no se
 traducen ni se modifican en la base de datos.
+
+### Cuentas y roles por escuela
+
+El acceso es único para todas las cuentas. El superadministrador crea escuelas; desde **Usuarios**, el superadministrador o un administrador de escuela crea cuentas con contraseña inicial (mínimo 12 caracteres), nombre, rol y acceso activo/desactivado.
+
+- **Alumno/a**: vinculado a un subgrupo; consulta únicamente sus sesiones publicadas, incluidas las clases de su grupo completo.
+- **Profesor/a**: vinculado a un docente nominal; consulta únicamente su agenda publicada.
+- **Coordinador/a**: consulta la planificación y las tareas calculadas a partir de semanas incompletas, reservas pendientes y publicaciones; puede asignar docentes, pero no publicar ni cambiar el catálogo.
+- **Administrador/a de escuela**: configura y planifica su escuela, publica horarios y gestiona sus usuarios. No puede crear escuelas ni conceder el rol global de superadministrador.
+
+Los permisos se comprueban en cada petición del servidor. Las respuestas personales excluyen borradores, actividad y agendas ajenas. Los cambios de rol y la desactivación se aplican también a las sesiones abiertas. La migración añade las tablas y campos necesarios conservando escuelas, horarios y la cuenta inicial. La Escuela Demo mantiene el selector de perfiles ficticios sin contraseña.

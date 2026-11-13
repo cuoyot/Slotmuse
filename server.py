@@ -8,7 +8,10 @@ import os
 from pathlib import Path
 import random
 import sqlite3
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer as BaseThreadingHTTPServer
+
+class ThreadingHTTPServer(BaseThreadingHTTPServer):
+    request_queue_size = 128
 from urllib.parse import urlparse, parse_qs
 
 ROOT = Path(__file__).resolve().parent
