@@ -84,6 +84,31 @@ class AvailabilityAPI(unittest.TestCase):
         self.assertEqual(self.call('catalog',body,school=school)[0],200)
         after=self.state(school);self.assertEqual(len(after['catalog']['groups']),2)
         self.assertEqual(after['catalog_revision'],state['catalog_revision']+1)
+    def test_school_can_add_locations_and_custom_space_types(self):
+        self.login();school=self.create();state=self.state(school)
+        self.assertEqual(len(state['catalog']['space_types']),4)
+        self.assertEqual(self.add(school,'locations',dict(name='Centro de tiro'))[0],200)
+        self.assertEqual(self.add(school,'space_types',dict(name='Galería de tiro'))[0],200)
+        state=self.state(school);kind=next(t for t in state['catalog']['space_types'] if t['name']=='Galería de tiro')
+        location=next(l for l in state['catalog']['locations'] if l['name']=='Centro de tiro')
+        self.assertFalse(kind['builtin'])
+        self.assertEqual(self.add(school,'rooms',dict(name='Galería 1',kind=kind['id'],capacity=24,location_id=location['id']))[0],200)
+        self.assertEqual(self.add(school,'subjects',dict(name='Tiro',kind=kind['id'],scope='subgroup',weekly_hours=1,total_hours=4,session_minutes=60,start='2026-11-09',end='2026-12-04',color='blue'))[0],200)
+        other=self.create('Otra escuela');self.assertNotIn(kind['id'],[t['id'] for t in self.state(other)['catalog']['space_types']])
+        self.assertEqual(self.add(other,'rooms',dict(name='Ajena',kind=kind['id'],capacity=24))[0],400)
+        self.assertEqual(self.add(school,'locations',dict(name='centro de tiro'))[0],400)
+
+    def test_new_subject_accepts_sessions_per_week_and_reports_derived_load(self):
+        self.login();school=self.create()
+        self.assertEqual(self.add(school,'subjects',dict(name='Derecho',kind='theory',scope='group',session_minutes=60,weekly_sessions=3,total_hours=30,start='2026-11-09',end='2027-01-29',color='blue'))[0],200)
+        subject=self.state(school)['catalog']['subjects'][0]
+        self.assertEqual(subject['weekly_sessions'],3);self.assertEqual(subject['weekly_hours'],3);self.assertEqual(subject['required_weeks'],10)
+        state=self.state(school)
+        status,result=self.call('subject',dict(id=subject['id'],week=state['week'],revision=state['data']['revision'],session_minutes=90,weekly_sessions=2,total_hours=30,start=subject['start'],end=subject['end']),school=school)
+        self.assertEqual(status,200,result)
+        updated=self.state(school)['catalog']['subjects'][0]
+        self.assertEqual(updated['session_minutes'],90);self.assertEqual(updated['weekly_sessions'],2);self.assertEqual(updated['weekly_hours'],3)
+
     def test_permissions_and_invalid_windows(self):
         self.prepare();body=self.payload()
         for windows in [[dict(day=5,start='08:00',end='13:00')],[dict(day=0,start='13:00',end='08:00')],[dict(day=0,start='8:00',end='13:00')]]:

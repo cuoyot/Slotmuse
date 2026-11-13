@@ -45,6 +45,29 @@ class TimeGrid(unittest.TestCase):
         self.assertEqual(server.subject_hours(dict(weekly_hours=2.5,total_hours=10.5,session_minutes=60))['session_minutes'],60)
         for duration in [0,45,61,True,450]:
             with self.assertRaises(ValueError):server.subject_hours(dict(weekly_hours=2,total_hours=10,session_minutes=duration))
+    def test_weekly_sessions_derive_hours_and_required_weeks(self):
+        value=server.subject_hours(dict(session_minutes=60,weekly_sessions=3,total_hours=30))
+        self.assertEqual(value['weekly_hours'],3);self.assertEqual(value['required_weeks'],10)
+        value=server.subject_hours(dict(session_minutes=90,weekly_sessions=2,total_hours=31.5))
+        self.assertEqual(value['weekly_hours'],3);self.assertEqual(value['required_weeks'],11)
+        for count in [0,1.5,True,71]:
+            with self.assertRaises(ValueError):server.subject_hours(dict(session_minutes=60,weekly_sessions=count,total_hours=30))
+
+    def test_subject_can_require_one_specific_room(self):
+        cat=self.catalog();cat['subjects'][0]['room_id']='aula2'
+        sessions,missing=server.generate(cat,week='2026-11-09');self.assertEqual(missing,[])
+        self.assertTrue(all(s['room']=='aula2' for s in sessions))
+        sessions[0]['room']='aula1'
+        self.assertTrue(any('espacio concreto' in e for e in server.validate(sessions,cat,'2026-11-09')))
+
+    def test_room_affinity_prefers_reusing_the_same_room_when_feasible(self):
+        cat=self.catalog();sessions,missing=server.generate(cat,week='2026-11-09')
+        self.assertEqual(missing,[])
+        for group in cat['groups']:
+            self.assertEqual(len({s['room'] for s in sessions if s['audience']==group['id']}),1)
+        assigned=[s for s in sessions if s['audience']=='A'];same=dict(assigned[0]);other={**same,'room':'aula2' if same['room']=='aula1' else 'aula1'}
+        self.assertLess(server.room_affinity_cost([same],assigned,cat),server.room_affinity_cost([other],assigned,cat))
+
     def test_legacy_migration_preserves_published_clock_times(self):
         with tempfile.TemporaryDirectory() as root,patch.object(server,'DB',Path(root)/'old.db'):
             with server.connect() as conn:
