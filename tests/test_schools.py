@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import Request, build_opener, ProxyHandler
 
 import server
 import school_app as app
@@ -28,6 +28,7 @@ class SchoolsAPI(unittest.TestCase):
         threading.Thread(target=self.http.serve_forever,daemon=True).start()
         self.base='http://127.0.0.1:'+str(self.http.server_port)
         self.cookie='';self.csrf=''
+        self.opener=build_opener(ProxyHandler({}))
     def tearDown(self):
         self.http.shutdown();self.http.server_close()
         app.DATA_ROOT,app.AUTH_DB,server.DB=self.old
@@ -39,7 +40,7 @@ class SchoolsAPI(unittest.TestCase):
         hdr.update(headers or {})
         req=Request(self.base+'/api/'+path,data=json.dumps(body).encode() if body is not None else None,headers=hdr)
         try:
-            with urlopen(req,timeout=15) as response:
+            with self.opener.open(req,timeout=15) as response:
                 if response.headers.get('Set-Cookie'):self.cookie=response.headers['Set-Cookie'].split(';')[0]
                 return response.status,json.load(response)
         except HTTPError as error:return error.code,json.load(error)
