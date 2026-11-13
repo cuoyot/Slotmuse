@@ -134,7 +134,7 @@ Se adopta la separación entre restricciones obligatorias y preferencias de la l
 
 ## Próximas iteraciones
 
-Múltiples cursos por escuela, cuentas para docentes/coordinadores/alumnado, tipos de espacio personalizados, festivos, duraciones variables, desplazamientos, eliminación/archivo de conceptos con referencias, importaciones y optimización CP-SAT.
+Múltiples cursos por escuela, cuentas para docentes/coordinadores/alumnado, festivos, duraciones variables, desplazamientos, eliminación/archivo de conceptos con referencias, importaciones y optimización CP-SAT.
 
 ## Licencia
 
@@ -186,3 +186,5 @@ Los espacios eligen su ubicación de una lista por escuela, ampliable en **Ubica
 La cuadrícula va de 08:00 a 15:00 en intervalos de 30 minutos. Las nuevas materias usan normalmente 60 minutos por sesión, configurables en múltiplos de 30. Las horas totales y semanales admiten incrementos de 0,5 h. La última sesión puede acortarse a los minutos pendientes. La edición manual permite una duración distinta por sesión; la cobertura se calcula en minutos, sin contar como equivalentes sesiones de diferente duración. Los horarios históricos conservan sus horas exactas y sus sesiones de 90 minutos, incluidas las publicadas a las 09:45.
 
 El generador agrupa actividades de subgrupo de igual duración, con materias distintas y espacios compatibles en una ubicación común, para ocupar simultáneamente todos los subgrupos del grupo. Por ejemplo A1 natación/A2 atletismo y posteriormente A1 atletismo/A2 natación. Cada bloque guarda un identificador compartido; se muestra como **Desdoblamiento**, con detalle por subgrupo, actividad, espacio y docente. No se mezclan grupos diferentes. Si un cambio de disponibilidad afecta a una parte, se reajusta todo el bloque; al mover manualmente una sesión se mueven sus compañeras. La publicación valida su integridad y coincidencia de día, horario y ubicación.
+
+En la propia tabla de alta de espacios o materias, **Nueva ubicación** y **Nuevo tipo de espacio** abren un pequeño formulario sin cerrar ni perder las filas. La opción creada se selecciona en la fila activa y se añade a todos los desplegables. Los tipos de espacio son listas por escuela y se usan tanto para espacios como para las necesidades de las materias.
