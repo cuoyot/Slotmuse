@@ -348,6 +348,21 @@ def rotation_packs(tasks,cat):
     return packs
 
 
+def room_affinity_cost(placed,sessions,cat):
+    cost=0
+    for item in placed:
+        group=next(g for g in cat['groups'] if item['audience']==g['id'] or item['audience'] in g['subgroups'])
+        room=next(r for r in cat['rooms'] if r['id']==item['room'])
+        size=group['size'] if item['audience']==group['id'] else (group['size']+len(group['subgroups'])-1)//len(group['subgroups'])
+        choices=sorted([r for r in cat['rooms'] if r['kind']==room['kind'] and r['capacity']>=size],key=lambda r:(r['name'].casefold(),r['id']))
+        if not choices:continue
+        home=choices[cat['groups'].index(group)%len(choices)]['id']
+        used={s['room'] for s in sessions if (s['audience']==group['id'] or s['audience'] in group['subgroups']) and any(r['id']==s['room'] and r['kind']==room['kind'] for r in cat['rooms'])}
+        if used and item['room'] not in used:cost+=12
+        if item['room']!=home:cost+=6
+    return cost
+
+
 def generate(cat, existing=None, seed=1, week=None):
     locked=[copy.deepcopy(s) for s in (existing or []) if s.get('locked')]
     if validate(locked,cat,week):raise ValueError('Las sesiones fijadas contienen conflictos.')
@@ -382,7 +397,7 @@ def generate(cat, existing=None, seed=1, week=None):
                             people=set().union(*(participants(s,cat) for s in placed))
                             daily=[s for s in sessions if s['day']==day and people & participants(s,cat)]
                             repeated=sum(s['subject'] in {p[0] for p in pack} for s in daily)
-                            score=len(daily)*3+repeated*9+slot*.25+sum(2 for s in placed if next(t for t in cat['teachers'] if t['id']==s['teacher'])['placeholder'])+rng.random()*2
+                            score=room_affinity_cost(placed,sessions,cat)+len(daily)*3+repeated*9+slot*.25+sum(2 for s in placed if next(t for t in cat['teachers'] if t['id']==s['teacher'])['placeholder'])+rng.random()*2
                             candidates.append((score,placed))
             if candidates:sessions.extend(min(candidates,key=lambda x:x[0])[1])
             else:missing.extend((subject,audience) for subject,audience,_ in pack)
