@@ -620,5 +620,14 @@
   "Aforo": "Aforament",
   "Docente": "Docent",
   "La planificación ha cambiado. Vuelve a calcular el impacto.": "La planificació ha canviat. Torna a calcular l’impacte.",
-  "Cuadrícula de 30 min · Última sesión ajustada al total": "Quadrícula de 30 min · Última sessió ajustada al total"
+  "Cuadrícula de 30 min · Última sesión ajustada al total": "Quadrícula de 30 min · Última sessió ajustada al total",
+  "Tipos de espacio": "Tipus d’espai",
+  "Nueva ubicación": "Nova ubicació",
+  "Nuevo tipo de espacio": "Nou tipus d’espai",
+  "＋ Nueva ubicación": "＋ Nova ubicació",
+  "＋ Nuevo tipo de espacio": "＋ Nou tipus d’espai",
+  "Crear y continuar": "Crear i continuar",
+  "Elemento creado. Puedes continuar con las filas.": "Element creat. Pots continuar amb les files.",
+  "Ya existe un elemento con ese nombre.": "Ja existeix un element amb aquest nom.",
+  "Tipo de espacio disponible para espacios y materias": "Tipus d’espai disponible per a espais i matèries"
 }
