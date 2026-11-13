@@ -531,5 +531,17 @@
   "Solo el superadministrador puede crear escuelas.": "Només el superadministrador pot crear escoles.",
   "Reasigna primero los usuarios de los subgrupos afectados.": "Reassigna primer els usuaris dels subgrups afectats.",
   "Un docente vinculado a una cuenta no puede convertirse en reserva.": "Un docent vinculat a un compte no es pot convertir en reserva.",
-  "Mi agenda semanal": "La meva agenda setmanal"
+  "Mi agenda semanal": "La meva agenda setmanal",
+  "Horas semanales por alumno": "Hores setmanals per alumne",
+  "Horas totales por alumno": "Hores totals per alumne",
+  "h totales por alumno": "h totals per alumne",
+  "h totales": "h totals",
+  "Sesiones de 90 min · Última semana ajustada al total": "Sessions de 90 min · Última setmana ajustada al total",
+  "Las horas son por alumno y deben ser múltiplos de 1,5 (sesiones de 90 minutos). La última semana se ajusta a las horas restantes. Solo se colocan sesiones dentro de estas fechas.": "Les hores són per alumne i han de ser múltiples d’1,5 (sessions de 90 minuts). L’última setmana s’ajusta a les hores restants. Només es programen sessions dins d’aquestes dates.",
+  "Al guardar se retirarán de los borradores las sesiones fuera del periodo o que excedan la nueva carga, incluidas las fijadas.": "En desar es retiraran dels esborranys les sessions fora del període o que superin la nova càrrega, incloses les fixades.",
+  "Las horas totales son el objetivo por alumno. La carga semanal distribuye ese objetivo desde el inicio previsto; la última semana puede tener menos horas. Si no cabe en el periodo, se avisará antes de generar. Las horas planificadas no equivalen a horas ya impartidas.": "Les hores totals són l’objectiu per alumne. La càrrega setmanal distribueix aquest objectiu des de l’inici previst; l’última setmana pot tenir menys hores. Si no cap dins del període, s’avisarà abans de generar. Les hores planificades no equivalen a hores ja impartides.",
+  "Una materia solo genera sesiones entre sus fechas de inicio y fin, inclusive. La carga semanal se aplica hasta completar el total; la última semana puede tener menos sesiones. Si las sesiones no caben en los días disponibles, la semana queda incompleta y no puede publicarse. Las fechas previstas pueden ajustarse durante el curso.": "Una matèria només genera sessions entre les dates d’inici i fi, incloses. La càrrega setmanal s’aplica fins a completar el total; l’última setmana pot tenir menys sessions. Si les sessions no caben en els dies disponibles, la setmana queda incompleta i no es pot publicar. Les dates previstes es poden ajustar durant el curs.",
+  "Las versiones publicadas se conservarán. Regenera las semanas afectadas para completar el nuevo objetivo.": "Les versions publicades es conservaran. Regenera les setmanes afectades per completar el nou objectiu.",
+  "Las horas totales de": "Les hores totals de",
+  "no caben en su periodo con la carga semanal indicada.": "no caben dins del període amb la càrrega setmanal indicada."
 }
