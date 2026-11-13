@@ -1,0 +1,57 @@
+ACADEMIA - DEMO PORTATIL PARA WINDOWS 11 x64
+Version 0.1 - 13 de noviembre de 2026
+
+COMO ABRIR
+1. Guarda el ZIP y haz clic derecho > Extraer todo.
+2. Entra en la carpeta extraida Academia-demo-Windows11-x64.
+3. Haz doble clic en INICIAR.cmd.
+4. Se abre una ventana de consola y despues el navegador predeterminado.
+   Si el navegador no se abre, copia la direccion que muestra la consola.
+
+No necesitas instalar Python, Docker ni paquetes adicionales.
+No necesitas permisos de administrador. Extrae el ZIP en una carpeta
+normal de tu usuario, como Documentos. No lo ejecutes dentro del ZIP
+ni desde una carpeta de solo lectura.
+
+La aplicacion se ejecuta solo en este ordenador (127.0.0.1).
+Si el puerto 8000 esta ocupado, se escoge otro puerto automaticamente.
+Manten abierta la consola. Para terminar, cierra la consola o pulsa Ctrl+C.
+Cerrar solo la pestana del navegador no detiene la aplicacion.
+
+QUE PROBAR
+- Temporada: mapa de asignaturas y borradores de las 41 semanas.
+- Plan formativo: fechas de inicio y fin y carga semanal de cada materia.
+- Planificacion: abrir una semana y ajustar o fijar sesiones.
+- Asignacion docente: sustituir reservas por profesores habilitados.
+- Publicar semana: hace visible el horario a los alumnos.
+
+El selector superior permite cambiar de identidad, sin contrasena:
+Elena Martin (gestora), Carlos Ruiz (coordinador), Lucia Torres (A1)
+y Pablo Garcia (B2). Los nombres y datos son ficticios.
+La semana del 9 de noviembre de 2026 ya esta publicada para probar
+el perfil de alumno; el resto son borradores.
+
+DONDE SE GUARDAN LOS CAMBIOS
+Todos los cambios se guardan en data\academia.db, dentro de esta carpeta.
+Se conservan al cerrar y volver a iniciar. Cada copia del ZIP es independiente.
+Para hacer una copia de seguridad, cierra la consola y copia toda la carpeta.
+Para compartir tus resultados, cierra la consola y comprime toda la carpeta.
+
+ALCANCE DE LA DEMO
+- Windows 11 de 64 bits, procesadores Intel o AMD (x64).
+- No es un instalador ni un ejecutable unico: hay que conservar toda la carpeta.
+- El runtime oficial de Python esta incluido con su licencia en runtime\LICENSE.txt.
+- La aplicacion funciona sin conexion; si las fuentes web no estan disponibles,
+  se utilizan fuentes del sistema.
+- No contempla festivos ni horas totales acumuladas: usa objetivos semanales.
+- El acceso sin contrasena es deliberado y sirve para evaluacion con datos ficticios.
+
+COMPROBACION Y SOPORTE
+El paquete y el arranque se han comprobado en macOS con Python local.
+Los binarios Windows se incluyen del paquete oficial de Python, verificados
+mediante SHA-256. Falta la prueba final del lanzador en un Windows 11 real.
+Si hay un error de arranque, envia el mensaje de la consola y, si existe,
+el archivo error-inicio.txt. No modifiques ni borres el runtime.
+
+Origen del runtime y checksum: PAQUETE.json.
+Descripcion tecnica y bibliografia: README.md.
