@@ -70,9 +70,9 @@ La interfaz permite crear usuarios, editar roles y desactivar su acceso por escu
 - Se comprueban aforo, tipología, habilitación, disponibilidad, carga y cruces de alumnado/docente/espacio.
 - Cada reserva representa un puesto individual que no puede cubrir dos sesiones simultáneas.
 - La heurística prioriza espacios técnicos escasos y busca repartir carga, evitar repeticiones diarias y favorecer docentes nominales y franjas tempranas. Puede hacer hasta 40 intentos cuando faltan sesiones. **No garantiza un óptimo global.**
-- Solo se generan sesiones dentro de las fechas de cada asignatura. El objetivo completo se exige también en semanas parciales; si no cabe, el borrador queda incompleto y no se publica.
+- Solo se generan sesiones dentro de las fechas de cada asignatura. La carga semanal se aplica hasta completar las horas totales por alumno; la última semana puede tener menos sesiones. Si las horas no caben entre inicio y fin, se bloquea la generación y se pide ajustar el periodo o la carga.
 - La temporada delimita semanas. Todavía no descuenta festivos, vacaciones o días no lectivos.
-- La carga prevista suma objetivos semanales, no horas ya impartidas ni una bolsa total obligatoria.
+- Cada materia tiene horas totales y horas semanales por alumno, en múltiplos de 1,5 horas. La carga prevista muestra las horas totales, no horas ya impartidas. Las materias existentes conservan su carga previa como total inicial.
 - Los borradores están separados de los horarios publicados. Publicar exige cobertura completa, ausencia de conflictos y todos los docentes nominales.
 - La generación de temporada solo crea semanas que faltan. Al regenerar una semana se conservan las sesiones fijadas.
 - Cambiar periodos mediante el editor semanal retira sesiones fuera de periodo de todos los borradores, incluidas las fijadas, pero conserva las versiones publicadas.
@@ -134,7 +134,7 @@ Se adopta la separación entre restricciones obligatorias y preferencias de la l
 
 ## Próximas iteraciones
 
-Múltiples cursos por escuela, cuentas para docentes/coordinadores/alumnado, tipos de espacio personalizados, festivos, horas totales, duraciones variables, desplazamientos, eliminación/archivo de conceptos con referencias, importaciones y optimización CP-SAT.
+Múltiples cursos por escuela, cuentas para docentes/coordinadores/alumnado, tipos de espacio personalizados, festivos, duraciones variables, desplazamientos, eliminación/archivo de conceptos con referencias, importaciones y optimización CP-SAT.
 
 ## Licencia
 
