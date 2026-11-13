@@ -177,7 +177,7 @@ def load_week(conn,week,cat):
     row=conn.execute('SELECT data FROM weeks WHERE week=?',(week,)).fetchone()
     if row: return json.loads(row[0])
     data=new_week(cat,week) if cat.get('is_demo',True) else dict(sessions=[],published=None,revision=1,updated=dt.datetime.now().isoformat(timespec='seconds'),history=[],missing=coverage([],cat,week))
-    save_week(conn,week,data)
+    if cat.get('is_demo',True): save_week(conn,week,data)
     return data
 
 def save_week(conn,week,data):
@@ -263,10 +263,14 @@ class Handler(SimpleHTTPRequestHandler):
                 elif action=='/api/season-generate':
                     created=0
                     for target in season_weeks(cat):
-                        if conn.execute('SELECT 1 FROM weeks WHERE week=?',(target,)).fetchone(): continue
+                        previous=conn.execute('SELECT data FROM weeks WHERE week=?',(target,)).fetchone()
+                        if previous:
+                            untouched=json.loads(previous[0])
+                            if untouched['sessions'] or untouched['published'] or untouched['history']: continue
                         item=new_week(cat,target)
                         item['history'].append(dict(at=item['updated'],user=user['name'],message='Borrador creado desde la planificación de temporada'))
-                        conn.execute('INSERT INTO weeks VALUES (?,?)',(target,json.dumps(item,ensure_ascii=False)))
+                        conn.execute('INSERT OR REPLACE INTO weeks VALUES (?,?)',(target,json.dumps(item,ensure_ascii=False)))
+                        if target==week: data=item
                         created+=1
                     message=f'Temporada planificada · {created} borradores creados; semanas existentes conservadas'
                 elif action=='/api/subject':
