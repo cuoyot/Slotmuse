@@ -175,6 +175,10 @@ class Handler(server.Handler):
                 value['permissions']['manage_schools']=self.current_principal['role']=='superadmin'
                 value['permissions']['configure']=self.current_principal['role']=='superadmin'
             value['setup_issues']=readiness(value['catalog']) if value['permissions']['coordinate'] else []
+            if value['permissions']['coordinate']:
+                with school_db(school['id']) as conn:
+                    cat=server.get_catalog(conn)
+                    value['resource_alerts']=[dict(week=w,draft=len(server.room_conflicts(d['sessions'],cat,w)),published=len(server.room_conflicts((d.get('published') or {}).get('sessions',[]),cat,w))) for w,raw in conn.execute('SELECT week,data FROM weeks') for d in [json.loads(raw)] if server.room_conflicts(d['sessions'],cat,w) or server.room_conflicts((d.get('published') or {}).get('sessions',[]),cat,w)]
             value['catalog_revision']=getattr(self,'catalog_revision',1)
         super().send_json(value,status)
 
@@ -251,7 +255,7 @@ class Handler(server.Handler):
         visible['rooms']=[x for x in cat['rooms'] if x['id'] in {s['room'] for s in sessions}]
         visible['teachers']=[dict(id=x['id'],name=x['name'],placeholder=x['placeholder']) for x in cat['teachers'] if x['id'] in {s['teacher'] for s in sessions}]
         return self.send_json(dict(catalog=visible,users=[user],user=user,week=week,slots=server.SLOTS,
-            data=dict(sessions=sessions,published={'at':published['at']} if published else None,revision=1),season_summary=summary))
+            schedule_warnings=len(server.room_conflicts(sessions,cat,week)),data=dict(sessions=sessions,published={'at':published['at']} if published else None,revision=1),season_summary=summary))
 
     def mutation_allowed(self,principal,require_admin=False):
         origin=self.headers.get('Origin')
@@ -322,6 +326,7 @@ class Handler(server.Handler):
             if path=='/api/catalog' and not permissions['configure']:return self.send_json({'error':'No tienes permisos para esta acción.'},403)
         token=server.CURRENT_DB.set(school_path(school['id']))
         try:
+            if path=='/api/room-availability':return self.room_availability()
             if path=='/api/catalog':return self.edit_catalog()
             if path in ['/api/generate','/api/season-generate','/api/publish']:
                 with server.connect() as conn:issues=readiness(server.get_catalog(conn))
@@ -421,52 +426,116 @@ class Handler(server.Handler):
             return self.send_json({'ok':True,'school':dict(id=school_id,name=name,is_demo=0)},201)
         except (ValueError,KeyError,TypeError) as error:return self.send_json({'error':str(error)},400)
 
+    def room_availability(self):
+        try:
+            if self.current_school['is_demo'] or not self.member or not role_permissions(self.member['role'])['configure']:
+                return self.send_json({'error':'No tienes permisos para esta acción.'},403)
+            body=self.read_body();effective=dt.date.fromisoformat(body['from']).isoformat()
+            windows=body.get('windows')
+            if not isinstance(windows,list) or len(windows)>100:raise ValueError('Franjas no válidas.')
+            clean=[]
+            for w in windows:
+                if not isinstance(w,dict) or type(w.get('day')) is not int or w['day'] not in range(5):raise ValueError('Día no válido.')
+                for key in ['start','end']:
+                    t=w.get(key,'')
+                    if not isinstance(t,str) or len(t)!=5 or dt.time.fromisoformat(t).strftime('%H:%M')!=t:raise ValueError('Hora no válida.')
+                if w['start']>=w['end']:raise ValueError('La hora final debe ser posterior al inicio.')
+                clean.append(dict(day=w['day'],start=w['start'],end=w['end']))
+            merged=[]
+            for window in sorted(clean,key=lambda w:(w['day'],w['start'])):
+                if merged and merged[-1]['day']==window['day'] and window['start']<=merged[-1]['end']:
+                    merged[-1]['end']=max(merged[-1]['end'],window['end'])
+                else:merged.append(dict(window))
+            clean=merged
+            with server.connect() as conn:
+                conn.execute('BEGIN IMMEDIATE');cat=server.get_catalog(conn)
+                if body.get('catalog_revision')!=cat.get('revision',1):return self.send_json({'error':'El catálogo ha cambiado. Recarga antes de guardar.'},409)
+                room=next((r for r in cat['rooms'] if r['id']==body.get('room')),None)
+                if not room:raise ValueError('Espacio no encontrado.')
+                room['availability']=sorted([v for v in room.get('availability',[]) if v['from']!=effective]+[dict(**{'from':effective},windows=clean)],key=lambda v:v['from'])
+                stored=[(w,json.loads(raw)) for w,raw in conn.execute('SELECT week,data FROM weeks ORDER BY week')]
+                preview_token=token_hash(json.dumps(dict(catalog=cat,weeks=stored),sort_keys=True,ensure_ascii=False))
+                if body.get('preview_token') and body['preview_token']!=preview_token:return self.send_json({'error':'La planificación ha cambiado. Vuelve a calcular el impacto.'},409)
+                impact=[];missing=0
+                for week,data in stored:
+                    bad=server.room_conflicts(data['sessions'],cat,week)
+                    public=server.room_conflicts((data.get('published') or {}).get('sessions',[]),cat,week)
+                    if bad or public:impact.append(dict(week=week,draft=len(bad),published=len(public),locked=sum(bool(s.get('locked')) for s in bad)))
+                    if body.get('apply') is True and body.get('replan') is True and bad:
+                        bad_ids={s['id'] for s in bad};preserved=[dict(s) for s in data['sessions'] if s['id'] not in bad_ids]
+                        locks={s['id']:s.get('locked',False) for s in preserved}
+                        for s in preserved:s['locked']=True
+                        sessions,remaining=server.generate(cat,existing=preserved,week=week)
+                        for s in sessions:
+                            if s['id'] in locks:s['locked']=locks[s['id']]
+                        data['sessions']=sessions;data['missing']=remaining;missing+=len(remaining)
+                        data['revision']+=1;data['updated']=dt.datetime.now().isoformat(timespec='seconds')
+                        data['history'].insert(0,dict(at=data['updated'],user=self.member['name'],message='Disponibilidad de '+room['name']+': borrador reajustado'))
+                        conn.execute('UPDATE weeks SET data=? WHERE week=?',(json.dumps(data,ensure_ascii=False),week))
+                if body.get('apply') is True:
+                    cat['revision']=cat.get('revision',1)+1
+                    conn.execute('UPDATE settings SET data=? WHERE id=1',(json.dumps(cat,ensure_ascii=False),))
+            return self.send_json(dict(ok=True,impact=impact,missing=missing,preview_token=preview_token,message='Disponibilidad guardada. Revisa y publica los borradores afectados.' if body.get('apply') is True else 'Vista previa calculada.'))
+        except (ValueError,KeyError,TypeError) as error:return self.send_json({'error':str(error)},400)
+
     def edit_catalog(self):
         try:
             body=self.read_body();collection=body.get('collection')
-            if collection not in ['rooms','groups','subjects','teachers']:raise ValueError('Concepto no válido.')
-            item=body.get('item')
-            if not isinstance(item,dict):raise ValueError('Datos no válidos.')
+            if collection not in ['locations','rooms','groups','subjects','teachers']:raise ValueError('Concepto no válido.')
+            items=body.get('items',[body.get('item')])
+            if not isinstance(items,list) or not 1<=len(items)<=100 or any(not isinstance(i,dict) for i in items):raise ValueError('Indica entre 1 y 100 filas válidas.')
             with server.connect() as conn:
                 conn.execute('BEGIN IMMEDIATE')
                 cat=server.get_catalog(conn)
                 if body.get('catalog_revision')!=cat.get('revision',1):
                     return self.send_json({'error':'El catálogo ha cambiado. Recarga antes de guardar.'},409)
-                existing=next((x for x in cat[collection] if x['id']==item.get('id')),None)
-                if item.get('id') and not existing:raise ValueError('Concepto no encontrado.')
-                clean=dict(id=existing['id'] if existing else secrets.token_hex(6),name=text(item.get('name'),'Nombre'))
-                if collection in ['rooms','subjects']:
-                    if item.get('kind') not in KINDS:raise ValueError('Tipo de espacio no válido.')
-                    clean['kind']=item['kind']
-                if collection=='rooms':clean['capacity']=number(item.get('capacity'),'Aforo')
-                elif collection=='groups':
-                    clean['size']=number(item.get('size'),'Alumnos')
-                    count=number(item.get('subgroup_count'),'Subgrupos',2,20)
-                    if count>clean['size']:raise ValueError('No puede haber más subgrupos que alumnos.')
-                    clean['subgroups']=[clean['id']+'-'+str(i+1) for i in range(count)]
-                    # Conservar identificadores históricos al editar el tamaño/nombre.
-                    if existing and len(existing['subgroups'])==count:clean['subgroups']=existing['subgroups']
-                elif collection=='subjects':
-                    if item.get('scope') not in ['group','subgroup']:raise ValueError('Formato de grupo no válido.')
-                    clean.update(scope=item['scope'],color=item.get('color','blue'),**period(item))
-                    clean.update(server.subject_hours({**item,**clean},cat))
-                    if clean['color'] not in COLORS:raise ValueError('Color no válido.')
-                elif collection=='teachers':
-                    subjects=item.get('subjects');days=item.get('days')
-                    if not isinstance(subjects,list) or not subjects or any(s not in [x['id'] for x in cat['subjects']] for s in subjects):raise ValueError('Selecciona materias habilitadas de esta escuela.')
-                    if not isinstance(days,list) or not days or any(type(d) is not int or d not in range(5) for d in days):raise ValueError('Selecciona días disponibles válidos.')
-                    clean.update(subjects=list(dict.fromkeys(subjects)),days=list(dict.fromkeys(days)),placeholder=bool(item.get('placeholder')),max_daily=number(item.get('max_daily'),'Carga diaria',1,4),max_weekly=number(item.get('max_weekly'),'Carga semanal',1,20))
-                if existing:
-                    with platform_db() as auth:
-                        bindings=auth.execute('SELECT role,subgroup,teacher_id FROM memberships WHERE school_id=?',(self.current_school['id'],)).fetchall()
-                    if collection=='groups' and any(b['subgroup'] in existing['subgroups'] and b['subgroup'] not in clean['subgroups'] for b in bindings):raise ValueError('Reasigna primero los usuarios de los subgrupos afectados.')
-                    if collection=='teachers' and clean['placeholder'] and any(b['teacher_id']==clean['id'] for b in bindings):raise ValueError('Un docente vinculado a una cuenta no puede convertirse en reserva.')
-                cat[collection]=[x for x in cat[collection] if x['id']!=clean['id']]+[clean]
+                prior_errors={w:server.validate(json.loads(raw)['sessions'],cat,w) for w,raw in conn.execute('SELECT week,data FROM weeks')}
+                for row_number,item in enumerate(items,1):
+                    existing=next((x for x in cat[collection] if x['id']==item.get('id')),None)
+                    if item.get('id') and not existing:raise ValueError('Concepto no encontrado.')
+                    clean=dict(id=existing['id'] if existing else secrets.token_hex(6),name=text(item.get('name'),'Nombre'))
+                    if collection in ['rooms','subjects']:
+                        if item.get('kind') not in KINDS:raise ValueError('Tipo de espacio no válido.')
+                        clean['kind']=item['kind']
+                    if collection=='rooms':
+                        clean['capacity']=number(item.get('capacity'),'Aforo')
+                        clean['location_id']=item.get('location_id',existing.get('location_id','main') if existing else 'main')
+                        if clean['location_id'] not in [location['id'] for location in cat['locations']]:raise ValueError('Selecciona una ubicación de esta escuela.')
+                        if existing and 'availability' in existing:clean['availability']=existing['availability']
+                    elif collection=='groups':
+                        clean['size']=number(item.get('size'),'Alumnos')
+                        count=number(item.get('subgroup_count'),'Subgrupos',2,20)
+                        if count>clean['size']:raise ValueError('No puede haber más subgrupos que alumnos.')
+                        clean['subgroups']=[clean['id']+'-'+str(i+1) for i in range(count)]
+                        # Conservar identificadores históricos al editar el tamaño/nombre.
+                        if existing and len(existing['subgroups'])==count:clean['subgroups']=existing['subgroups']
+                    elif collection=='subjects':
+                        if item.get('scope') not in ['group','subgroup']:raise ValueError('Formato de grupo no válido.')
+                        clean.update(scope=item['scope'],color=item.get('color','blue'),**period(item))
+                        clean.update(server.subject_hours({**item,**clean},cat))
+                        if clean['color'] not in COLORS:raise ValueError('Color no válido.')
+                    elif collection=='teachers':
+                        subjects=item.get('subjects');days=item.get('days')
+                        if not isinstance(subjects,list) or not subjects or any(s not in [x['id'] for x in cat['subjects']] for s in subjects):raise ValueError('Selecciona materias habilitadas de esta escuela.')
+                        if not isinstance(days,list) or not days or any(type(d) is not int or d not in range(5) for d in days):raise ValueError('Selecciona días disponibles válidos.')
+                        clean.update(subjects=list(dict.fromkeys(subjects)),days=list(dict.fromkeys(days)),placeholder=bool(item.get('placeholder')),max_daily=number(item.get('max_daily'),'Carga diaria',1,4),max_weekly=number(item.get('max_weekly'),'Carga semanal',1,20))
+                    if existing:
+                        with platform_db() as auth:
+                            bindings=auth.execute('SELECT role,subgroup,teacher_id FROM memberships WHERE school_id=?',(self.current_school['id'],)).fetchall()
+                        if collection=='groups' and any(b['subgroup'] in existing['subgroups'] and b['subgroup'] not in clean['subgroups'] for b in bindings):raise ValueError('Reasigna primero los usuarios de los subgrupos afectados.')
+                        if collection=='teachers' and clean['placeholder'] and any(b['teacher_id']==clean['id'] for b in bindings):raise ValueError('Un docente vinculado a una cuenta no puede convertirse en reserva.')
+                    cat[collection]=[x for x in cat[collection] if x['id']!=clean['id']]+[clean]
                 cat['revision']=cat.get('revision',1)+1
                 # No invalidar silenciosamente semanas ya configuradas.
                 for week,raw in conn.execute('SELECT week,data FROM weeks'):
                     stored=json.loads(raw)
                     errors=server.validate(stored['sessions'],cat,week)
+                    previous=list(prior_errors.get(week,[]))
+                    introduced=[]
+                    for error in errors:
+                        if error in previous:previous.remove(error)
+                        else:introduced.append(error)
+                    errors=introduced
                     if errors:raise ValueError('El cambio afecta a sesiones existentes. Ajusta primero esas sesiones. '+errors[0])
                 conn.execute('UPDATE settings SET data=? WHERE id=1',(json.dumps(cat,ensure_ascii=False),))
             return self.send_json({'ok':True,'message':'Configuración de la escuela guardada.'})

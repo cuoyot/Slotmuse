@@ -30,7 +30,7 @@ El volumen `academia-data` conserva las escuelas y las sesiones. Cerrar o reinic
 2. **Crear escuela**: nombre, primer curso/temporada y fechas. Empieza vacía; no copia el catálogo de la demo.
 3. **Espacios**: aulas de teoría, tatami, piscina o pista exterior y su aforo.
 4. **Grupos y subgrupos**: alumnos por grupo y número de subgrupos técnicos. Se usa el tamaño del subgrupo más grande al comprobar aforos.
-5. **Materias**: formato (grupo completo/subgrupo), tipo de espacio, fechas previstas de inicio y fin y bloques semanales de 90 minutos.
+5. **Materias**: formato (grupo completo/subgrupo), tipo de espacio, fechas previstas de inicio y fin y horas totales, horas semanales y duración habitual de sesión.
 6. **Docentes y reservas**: habilitaciones, días disponibles y cargas máximas diaria/semanal.
 7. **Temporada**: revisar el mapa de materias y crear borradores semanales.
 8. **Semana**: ajustar sesiones, fijarlas, completar reservas docentes y publicar para su consulta.
@@ -65,14 +65,14 @@ La interfaz permite crear usuarios, editar roles y desactivar su acceso por escu
 
 ## Planificación
 
-- Cada sesión ocupa un espacio, un docente y una franja de 90 minutos.
+- Cada sesión ocupa un espacio y un docente durante su duración real, en una cuadrícula de 30 minutos.
 - Una clase de grupo completo bloquea a todos sus subgrupos. Dos subgrupos pueden trabajar en paralelo con recursos distintos.
 - Se comprueban aforo, tipología, habilitación, disponibilidad, carga y cruces de alumnado/docente/espacio.
 - Cada reserva representa un puesto individual que no puede cubrir dos sesiones simultáneas.
 - La heurística prioriza espacios técnicos escasos y busca repartir carga, evitar repeticiones diarias y favorecer docentes nominales y franjas tempranas. Puede hacer hasta 40 intentos cuando faltan sesiones. **No garantiza un óptimo global.**
 - Solo se generan sesiones dentro de las fechas de cada asignatura. La carga semanal se aplica hasta completar las horas totales por alumno; la última semana puede tener menos sesiones. Si las horas no caben entre inicio y fin, se bloquea la generación y se pide ajustar el periodo o la carga.
 - La temporada delimita semanas. Todavía no descuenta festivos, vacaciones o días no lectivos.
-- Cada materia tiene horas totales y horas semanales por alumno, en múltiplos de 1,5 horas. La carga prevista muestra las horas totales, no horas ya impartidas. Las materias existentes conservan su carga previa como total inicial.
+- Cada materia tiene horas totales y horas semanales por alumno, en múltiplos de 0,5 horas. La carga prevista muestra las horas totales, no horas ya impartidas. Las materias existentes conservan su carga previa como total inicial.
 - Los borradores están separados de los horarios publicados. Publicar exige cobertura completa, ausencia de conflictos y todos los docentes nominales.
 - La generación de temporada solo crea semanas que faltan. Al regenerar una semana se conservan las sesiones fijadas.
 - Cambiar periodos mediante el editor semanal retira sesiones fuera de periodo de todos los borradores, incluidas las fijadas, pero conserva las versiones publicadas.
@@ -166,3 +166,23 @@ El acceso es único para todas las cuentas. El superadministrador crea escuelas;
 - **Administrador/a de escuela**: configura y planifica su escuela, publica horarios y gestiona sus usuarios. No puede crear escuelas ni conceder el rol global de superadministrador.
 
 Los permisos se comprueban en cada petición del servidor. Las respuestas personales excluyen borradores, actividad y agendas ajenas. Los cambios de rol y la desactivación se aplican también a las sesiones abiertas. La migración añade las tablas y campos necesarios conservando escuelas, horarios y la cuenta inicial. La Escuela Demo mantiene el selector de perfiles ficticios sin contraseña.
+
+### Disponibilidad de espacios y reajuste
+
+Desde **Espacios y docentes → Disponibilidad**, define franjas semanales por día con una fecha de entrada en vigor. Ejemplo: piscina, lunes y miércoles, 08:00–13:00. Se admite más de una franja por día; las franjas contiguas se unen. Sin franjas, el espacio queda cerrado. Antes de la primera regla se conserva la disponibilidad completa anterior, y cada nueva fecha sustituye las reglas semanales desde ese día hasta el siguiente cambio.
+
+Las sesiones deben caber enteras dentro de una franja: con cierre a las 13:00 no se puede usar una sesión que termine después de las 13:00. La validación se aplica a generación, edición manual, asignaciones y publicación.
+
+**Ver impacto** muestra semanas y sesiones afectadas, incluidas las fijadas y las publicadas. **Aplicar disponibilidad** puede reajustar los borradores en una sola transacción: conserva las sesiones válidas y busca huecos para el resto. Las fijadas incompatibles se recolocan tras mostrarse en la vista previa. Si no hay solución completa, guarda una propuesta parcial y bloquea su publicación hasta completar la cobertura. Las versiones publicadas se conservan y aparecen avisos de revisión para coordinación y en las agendas personales afectadas; hay que revisar y publicar de nuevo. La comprobación de versión evita aplicar una vista previa sobre un catálogo que haya cambiado.
+
+### Altas por filas
+
+Las altas de espacios, grupos, materias, docentes y alumnado/usuarios utilizan una tabla. **Tab** avanza entre campos, **Enter** pasa a la misma columna de la siguiente fila y **Ctrl/⌘ + Enter** guarda. Se pueden añadir filas sin cerrar la tabla. Las altas del catálogo se guardan juntas de forma atómica; las cuentas se guardan por fila y las guardadas quedan identificadas para no repetirlas si otra falla. Los errores conservan el contenido introducido. Los docentes usan los números de las materias que se muestran encima de la tabla y días 1–5 (lunes–viernes).
+
+### Ubicaciones, duración y desdoblamientos
+
+Los espacios eligen su ubicación de una lista por escuela, ampliable en **Ubicaciones en filas**. Las ubicaciones distintas requieren al menos **30 minutos** entre sesiones del mismo docente o de alumnado compartido; se comparan intervalos reales, también al editar y publicar.
+
+La cuadrícula va de 08:00 a 15:00 en intervalos de 30 minutos. Las nuevas materias usan normalmente 60 minutos por sesión, configurables en múltiplos de 30. Las horas totales y semanales admiten incrementos de 0,5 h. La última sesión puede acortarse a los minutos pendientes. La edición manual permite una duración distinta por sesión; la cobertura se calcula en minutos, sin contar como equivalentes sesiones de diferente duración. Los horarios históricos conservan sus horas exactas y sus sesiones de 90 minutos, incluidas las publicadas a las 09:45.
+
+El generador agrupa actividades de subgrupo de igual duración, con materias distintas y espacios compatibles en una ubicación común, para ocupar simultáneamente todos los subgrupos del grupo. Por ejemplo A1 natación/A2 atletismo y posteriormente A1 atletismo/A2 natación. Cada bloque guarda un identificador compartido; se muestra como **Desdoblamiento**, con detalle por subgrupo, actividad, espacio y docente. No se mezclan grupos diferentes. Si un cambio de disponibilidad afecta a una parte, se reajusta todo el bloque; al mover manualmente una sesión se mueven sus compañeras. La publicación valida su integridad y coincidencia de día, horario y ubicación.
