@@ -63,6 +63,7 @@ def get_catalog(conn):
                     session['slot']=(session['start_minute']-480)//30
             conn.execute('UPDATE weeks SET data=? WHERE week=?',(json.dumps(data,ensure_ascii=False),week))
         cat['time_grid_version']=2
+    cat.setdefault('non_teaching_days',[])
     cat.setdefault('space_types',[dict(id=id,name=name,builtin=True) for id,name in [('theory','Aula de teoría'),('tatami','Defensa personal'),('pool','Salvamento acuático'),('outdoor','Preparación física')]])
     cat.setdefault('locations',[dict(id='main',name='Campus principal')])
     for room in cat['rooms']:room.setdefault('location_id','main')
@@ -73,6 +74,10 @@ def get_catalog(conn):
         subject.setdefault('session_minutes',90)
         subject.setdefault('weekly_hours',subject['blocks']*1.5)
         subject.setdefault('total_hours',sum(active(subject,w) for w in season_weeks(cat))*subject['weekly_hours'])
+        subject.setdefault('weekly_sessions',(round(subject['weekly_hours']*60)+subject['session_minutes']-1)//subject['session_minutes'])
+        subject['required_weeks']=int(__import__('math').ceil(subject['total_hours']/subject['weekly_hours']))
+    ensure_pending_teachers(cat)
+    cat['teachers'].sort(key=lambda t:(t.get('automatic',False),t['placeholder'],t['name'].casefold()))
     if cat!=original:conn.execute('UPDATE settings SET data=? WHERE id=1',(json.dumps(cat,ensure_ascii=False),))
     return cat
 
@@ -109,20 +114,62 @@ def participants(session, cat):
         if session['audience'] in group['subgroups']: return {session['audience']}
     raise ValueError('Grupo o subgrupo desconocido.')
 
+def ensure_pending_teachers(cat):
+    # Una reserva por audiencia evita que un puesto pendiente bloquee otro simultáneo.
+    for subject in cat['subjects']:
+        if any(not t['placeholder'] and subject['id'] in t['subjects'] for t in cat['teachers']):continue
+        for group in cat['groups']:
+            for audience in ([group['id']] if subject['scope']=='group' else group['subgroups']):
+                teacher_id='pending-'+subject['id']+'-'+audience
+                if any(t['id']==teacher_id for t in cat['teachers']):continue
+                cat['teachers'].append(dict(id=teacher_id,name='Pendiente de asignar · '+subject['name'],subjects=[subject['id']],days=[0,1,2,3,4],placeholder=True,automatic=True,audience=audience,max_daily=14,max_weekly=70))
+
+
+def teaching_day(cat,date):
+    value=dt.date.fromisoformat(date)
+    return value.weekday()<5 and not any(p.get('enabled',True) and p['start']<=date<=p['end'] for p in cat.get('non_teaching_days',[]))
+
+
+def teaching_week(subject,cat,week):
+    return any(active(subject,week,day) and teaching_day(cat,(dt.date.fromisoformat(week)+dt.timedelta(days=day)).isoformat()) for day in range(5))
+
+
+def room_windows(room,date):
+    versions=room.get('availability',[])
+    if room.get('availability_mode')=='periods':
+        applicable=[v for v in versions if v['from']<=date<=v.get('until','9999-12-31')]
+    else:applicable=[v for v in versions if v['from']<=date]
+    if not applicable:return [] if room.get('availability_mode')=='periods' else [dict(day=day,start='08:00',end='15:00') for day in range(5)]
+    return max(applicable,key=lambda v:v['from'])['windows']
+
+
+def room_periods(room,cat):
+    if room.get('availability_mode')=='periods':return copy.deepcopy(room.get('availability',[]))
+    start,end=cat['season']['start'],cat['season']['end'];versions=sorted(room.get('availability',[]),key=lambda v:v['from']);result=[]
+    if not versions:return [dict(**{'from':start},until=end,windows=[dict(day=day,start='08:00',end='15:00') for day in range(5)])]
+    if start<versions[0]['from']:result.append(dict(**{'from':start},until=(dt.date.fromisoformat(versions[0]['from'])-dt.timedelta(days=1)).isoformat(),windows=[dict(day=day,start='08:00',end='15:00') for day in range(5)]))
+    for index,v in enumerate(versions):
+        until=(dt.date.fromisoformat(versions[index+1]['from'])-dt.timedelta(days=1)).isoformat() if index+1<len(versions) else max(end,v['from'])
+        result.append(dict(**{'from':v['from']},until=until,windows=copy.deepcopy(v['windows'])))
+    return result
+
+
 def room_available(room,week,day,slot,duration=90,start_minute=None):
     if not week:return True
     date=(dt.date.fromisoformat(week)+dt.timedelta(days=day)).isoformat()
-    versions=[v for v in room.get('availability',[]) if v['from']<=date]
-    if not versions:return True  # Compatibilidad: disponibilidad completa antes de la primera regla.
-    version=max(versions,key=lambda v:v['from'])
     start_minute=480+slot*30 if start_minute is None else start_minute
     start,end=clock_text(start_minute),clock_text(start_minute+duration)
-    return any(w['day']==day and w['start']<=start and w['end']>=end for w in version['windows'])
+    return any(w['day']==day and w['start']<=start and w['end']>=end for w in room_windows(room,date))
 
 
 def room_conflicts(sessions,cat,week):
     rooms={r['id']:r for r in cat['rooms']}
-    bad=[s for s in sessions if s['room'] in rooms and not room_available(rooms[s['room']],week,s['day'],s['slot'],session_duration(s,cat),session_start(s))]
+    bad=[s for s in sessions if not teaching_day(cat,(dt.date.fromisoformat(week)+dt.timedelta(days=s['day'])).isoformat()) or (s['room'] in rooms and not room_available(rooms[s['room']],week,s['day'],s['slot'],session_duration(s,cat),session_start(s)))]
+    counts={}
+    for session in sessions:
+        key=(session['subject'],session['audience']);counts[key]=counts.get(key,0)+session_duration(session,cat)
+        sub=next((x for x in cat['subjects'] if x['id']==session['subject']),None)
+        if sub and counts[key]>subject_week_minutes(sub,cat,week) and session not in bad:bad.append(session)
     splits={s['split_id'] for s in bad if s.get('split_id')}
     return [s for s in sessions if s in bad or s.get('split_id') in splits]
 
@@ -155,6 +202,7 @@ def validate(sessions, cat, week=None,allow_partial=False):
         except ValueError as exc: errors.append(str(exc)); continue
         group=next(g for g in cat['groups'] if people <= set(g['subgroups']))
         size=group['size'] if len(people)>1 else (group['size']+len(group['subgroups'])-1)//len(group['subgroups'])
+        if week and not teaching_day(cat,(dt.date.fromisoformat(week)+dt.timedelta(days=s['day'])).isoformat()):errors.append(f'{tag}: día no lectivo.')
         if week and not active(subject,week,s['day']): errors.append(f'{tag}: materia fuera de su periodo de impartición.')
         if subject['scope']=='subgroup' and len(people)!=1: errors.append(f'{tag}: la práctica requiere un subgrupo.')
         if subject['scope']=='group' and len(people)!=len(group['subgroups']): errors.append(f'{tag}: la teoría requiere el grupo completo.')
@@ -202,6 +250,10 @@ def subject_hours(item,cat=None):
     duration=item.get('session_minutes',90)
     if type(duration) is not int or not 30<=duration<=420 or duration%30:
         raise ValueError('La duración debe ser un múltiplo de 30 minutos, entre 30 y 420.')
+    count=item.get('weekly_sessions')
+    if count is not None:
+        if type(count) is not int or not 1<=count<=70:raise ValueError('Indica entre 1 y 70 sesiones semanales.')
+        weekly=count*duration/60
     for value,label in [(weekly,'Horas semanales'),(total,'Horas totales')]:
         if value is None and label=='Horas totales':continue
         if type(value) not in (int,float) or not 0<value<=10000 or abs(value*2-round(value*2))>1e-8:
@@ -209,14 +261,14 @@ def subject_hours(item,cat=None):
     if weekly>35:raise ValueError('Las horas semanales no pueden superar 35 horas.')
     if total is None:total=sum(active(item,w) for w in season_weeks(cat))*weekly if cat else weekly
     if total<=0:raise ValueError('El periodo debe incluir al menos una semana de formación.')
-    return dict(weekly_hours=weekly,total_hours=total,session_minutes=duration,blocks=(round(weekly*60)+duration-1)//duration)
+    return dict(weekly_hours=weekly,total_hours=total,session_minutes=duration,weekly_sessions=count if count is not None else (round(weekly*60)+duration-1)//duration,required_weeks=int(__import__('math').ceil(total/weekly)),blocks=(round(weekly*60)+duration-1)//duration)
 
 
 def subject_week_minutes(subject,cat,week=None):
     weekly=round(subject.get('weekly_hours',subject.get('blocks',1)*1.5)*60)
-    if week and not active(subject,week):return 0
+    if week and not teaching_week(subject,cat,week):return 0
     if 'total_hours' not in subject or week is None:return weekly
-    weeks=[w for w in season_weeks(cat) if active(subject,w)]
+    weeks=[w for w in season_weeks(cat) if teaching_week(subject,cat,w)]
     if week not in weeks:return 0
     return max(0,min(weekly,round(subject['total_hours']*60)-weeks.index(week)*weekly))
 
@@ -272,6 +324,7 @@ def rotation_packs(tasks,cat):
 def generate(cat, existing=None, seed=1, week=None):
     locked=[copy.deepcopy(s) for s in (existing or []) if s.get('locked')]
     if validate(locked,cat,week):raise ValueError('Las sesiones fijadas contienen conflictos.')
+    ensure_pending_teachers(cat)
     tasks=coverage_tasks(locked,cat,week);rng=random.Random(seed);best=None
     packs=rotation_packs(tasks,cat)
     for attempt in range(40):
@@ -290,7 +343,7 @@ def generate(cat, existing=None, seed=1, week=None):
                             for room in cat['rooms']:
                                 if room['kind']!=subject['kind'] or (location is not None and room.get('location_id','main')!=location) or not room_available(room,week,day,slot,duration):continue
                                 for teacher in teachers:
-                                    if subject_id not in teacher['subjects']:continue
+                                    if subject_id not in teacher['subjects'] or (teacher.get('automatic') and teacher.get('audience')!=audience):continue
                                     item=dict(id='s-'+os.urandom(6).hex(),subject=subject_id,audience=audience,day=day,slot=slot,start_minute=480+slot*30,duration_minutes=duration,room=room['id'],teacher=teacher['id'],locked=False)
                                     if split_id:item.update(split_id=split_id,split_size=len(pack))
                                     if validate(sessions+placed+[item],cat,week,allow_partial=True):continue
@@ -309,6 +362,17 @@ def generate(cat, existing=None, seed=1, week=None):
         if best is None or len(missing)<len(best[1]):best=(sessions,missing)
         if not missing:break
     return best
+
+
+def repair_sessions(data,cat,week):
+    bad={s['id'] for s in room_conflicts(data['sessions'],cat,week)}
+    preserved=[copy.deepcopy(s) for s in data['sessions'] if s['id'] not in bad]
+    locks={s['id']:s.get('locked',False) for s in preserved}
+    for s in preserved:s['locked']=True
+    sessions,missing=generate(cat,existing=preserved,week=week)
+    for s in sessions:
+        if s['id'] in locks:s['locked']=locks[s['id']]
+    return sessions,missing
 
 
 def new_week(cat,week):
@@ -435,9 +499,10 @@ class Handler(SimpleHTTPRequestHandler):
                     if not sub: raise ValueError('Materia no encontrada.')
                     start=dt.date.fromisoformat(body['start']); end=dt.date.fromisoformat(body['end'])
                     if start>end: raise ValueError('La fecha de fin debe ser igual o posterior al inicio.')
-                    if 'weekly_hours' not in body and (type(body.get('blocks')) is not int or not 1<=body['blocks']<=10): raise ValueError('Indica entre 1 y 10 bloques semanales.')
+                    if 'weekly_sessions' not in body and 'weekly_hours' not in body and (type(body.get('blocks')) is not int or not 1<=body['blocks']<=10): raise ValueError('Indica entre 1 y 10 bloques semanales.')
                     proposed={**sub,**body,'start':start.isoformat(),'end':end.isoformat()}
-                    if 'weekly_hours' not in body:proposed['weekly_hours']=body['blocks']*1.5
+                    if 'weekly_sessions' not in body:proposed.pop('weekly_sessions',None)
+                    if 'weekly_sessions' not in body and 'weekly_hours' not in body:proposed['weekly_hours']=body['blocks']*1.5
                     sub.update(start=start.isoformat(),end=end.isoformat(),**subject_hours(proposed,cat))
                     conn.execute('UPDATE settings SET data=? WHERE id=1',(json.dumps(cat,ensure_ascii=False),))
                     # Las fechas son globales: limpiar borradores, nunca versiones publicadas.
