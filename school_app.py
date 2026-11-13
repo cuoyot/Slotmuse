@@ -19,7 +19,6 @@ DATA_ROOT = Path(os.environ.get('APP_DATA_DIR', str(server.DB.parent)))
 AUTH_DB = DATA_ROOT / 'platform.db'
 SESSION_TTL = 12 * 60 * 60
 PASSWORD_ROUNDS = 600_000
-KINDS = {'theory','tatami','pool','outdoor'}
 COLORS = {'blue','violet','orange','teal','green'}
 SCHOOL_ROLES = {'student','teacher','coordinator','school_admin'}
 ROLE_LABELS = {'student':'Alumno/a','teacher':'Profesor/a','coordinator':'Coordinador/a','school_admin':'Administrador/a de escuela','superadmin':'Superadministrador'}
@@ -481,7 +480,7 @@ class Handler(server.Handler):
     def edit_catalog(self):
         try:
             body=self.read_body();collection=body.get('collection')
-            if collection not in ['locations','rooms','groups','subjects','teachers']:raise ValueError('Concepto no válido.')
+            if collection not in ['space_types','locations','rooms','groups','subjects','teachers']:raise ValueError('Concepto no válido.')
             items=body.get('items',[body.get('item')])
             if not isinstance(items,list) or not 1<=len(items)<=100 or any(not isinstance(i,dict) for i in items):raise ValueError('Indica entre 1 y 100 filas válidas.')
             with server.connect() as conn:
@@ -494,8 +493,11 @@ class Handler(server.Handler):
                     existing=next((x for x in cat[collection] if x['id']==item.get('id')),None)
                     if item.get('id') and not existing:raise ValueError('Concepto no encontrado.')
                     clean=dict(id=existing['id'] if existing else secrets.token_hex(6),name=text(item.get('name'),'Nombre'))
+                    if collection in ['locations','space_types']:
+                        if any(x['name'].strip().casefold()==clean['name'].casefold() and x['id']!=clean['id'] for x in cat[collection]):raise ValueError('Ya existe un elemento con ese nombre.')
+                        if collection=='space_types':clean['builtin']=existing.get('builtin',False) if existing else False
                     if collection in ['rooms','subjects']:
-                        if item.get('kind') not in KINDS:raise ValueError('Tipo de espacio no válido.')
+                        if item.get('kind') not in [t['id'] for t in cat['space_types']]:raise ValueError('Tipo de espacio no válido.')
                         clean['kind']=item['kind']
                     if collection=='rooms':
                         clean['capacity']=number(item.get('capacity'),'Aforo')
