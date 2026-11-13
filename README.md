@@ -177,7 +177,7 @@ Las sesiones deben caber enteras dentro de una franja: con cierre a las 13:00 no
 
 ### Altas por filas
 
-Las altas de espacios, grupos, materias, docentes y alumnado/usuarios utilizan una tabla. **Tab** avanza entre campos, **Enter** pasa a la misma columna de la siguiente fila y **Ctrl/⌘ + Enter** guarda. Se pueden añadir filas sin cerrar la tabla. Las altas del catálogo se guardan juntas de forma atómica; las cuentas se guardan por fila y las guardadas quedan identificadas para no repetirlas si otra falla. Los errores conservan el contenido introducido. Los docentes usan los números de las materias que se muestran encima de la tabla y días 1–5 (lunes–viernes).
+Las altas de espacios, grupos, materias, docentes y alumnado/usuarios utilizan una tabla. **Tab** avanza entre campos, **Enter** pasa a la misma columna de la siguiente fila y **Ctrl/⌘ + Enter** guarda. Se pueden añadir filas sin cerrar la tabla. Las altas del catálogo se guardan juntas de forma atómica; las cuentas se guardan por fila y las guardadas quedan identificadas para no repetirlas si otra falla. Los errores conservan el contenido introducido. Los docentes seleccionan las materias y los días mediante casillas con sus nombres. Las materias sin docente nominal se planifican con reservas pendientes y no pueden publicarse hasta completarlas.
 
 ### Ubicaciones, duración y desdoblamientos
 
@@ -188,3 +188,13 @@ La cuadrícula va de 08:00 a 15:00 en intervalos de 30 minutos. Las nuevas mater
 El generador agrupa actividades de subgrupo de igual duración, con materias distintas y espacios compatibles en una ubicación común, para ocupar simultáneamente todos los subgrupos del grupo. Por ejemplo A1 natación/A2 atletismo y posteriormente A1 atletismo/A2 natación. Cada bloque guarda un identificador compartido; se muestra como **Desdoblamiento**, con detalle por subgrupo, actividad, espacio y docente. No se mezclan grupos diferentes. Si un cambio de disponibilidad afecta a una parte, se reajusta todo el bloque; al mover manualmente una sesión se mueven sus compañeras. La publicación valida su integridad y coincidencia de día, horario y ubicación.
 
 En la propia tabla de alta de espacios o materias, **Nueva ubicación** y **Nuevo tipo de espacio** abren un pequeño formulario sin cerrar ni perder las filas. La opción creada se selecciona en la fila activa y se añade a todos los desplegables. Los tipos de espacio son listas por escuela y se usan tanto para espacios como para las necesidades de las materias.
+
+Las materias se introducen con **duración de sesión** (60 minutos por defecto, múltiplos de 30), **sesiones semanales** y **horas totales**. Las horas semanales y las semanas necesarias se calculan automáticamente, también mientras se rellena la tabla: duración × sesiones / 60, y redondeo al alza de horas totales / horas semanales. Las fechas siguen delimitando el periodo disponible.
+
+### Calendario escolar mensual y anual
+
+**Calendario escolar** permite filtrar un espacio y consultar meses o el año completo: verde disponible, gris sin disponibilidad, rojo no lectivo y tono separado para fines de semana. Al seleccionar un día se ven sus franjas y motivos de cierre.
+
+La disponibilidad admite periodos explícitos **inicio–fin**, con franjas semanales. Se selecciona un periodo existente para editarlo o se añade uno nuevo; fuera de los periodos el espacio queda cerrado. El diálogo muestra un resumen legible y una vista mensual previa. Los intervalos antiguos sin fecha final se siguen interpretando como cambios de vigencia; al editarlos se convierten en periodos equivalentes antes de aplicar el cambio.
+
+Los días no lectivos se introducen por filas con motivo, inicio y fin (iguales para una fecha suelta), y pueden desactivarse. Prevalecen sobre cualquier disponibilidad del espacio. Se reajustan los borradores afectados preservando las publicaciones para revisión; las semanas completamente cerradas no consumen horas del objetivo de la materia. Las semanas parciales mantienen la carga prevista, que puede requerir revisión si no cabe.
