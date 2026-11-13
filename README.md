@@ -155,3 +155,14 @@ a los textos de interfaz y formatea las fechas mediante `Intl`. Los segmentos
 literales de las plantillas están separados de sus valores dinámicos: los nombres
 de escuelas, docentes, materias y otros datos introducidos por el usuario no se
 traducen ni se modifican en la base de datos.
+
+### Cuentas y roles por escuela
+
+El acceso es único para todas las cuentas. El superadministrador crea escuelas; desde **Usuarios**, el superadministrador o un administrador de escuela crea cuentas con contraseña inicial (mínimo 12 caracteres), nombre, rol y acceso activo/desactivado.
+
+- **Alumno/a**: vinculado a un subgrupo; consulta únicamente sus sesiones publicadas, incluidas las clases de su grupo completo.
+- **Profesor/a**: vinculado a un docente nominal; consulta únicamente su agenda publicada.
+- **Coordinador/a**: consulta la planificación y las tareas calculadas a partir de semanas incompletas, reservas pendientes y publicaciones; puede asignar docentes, pero no publicar ni cambiar el catálogo.
+- **Administrador/a de escuela**: configura y planifica su escuela, publica horarios y gestiona sus usuarios. No puede crear escuelas ni conceder el rol global de superadministrador.
+
+Los permisos se comprueban en cada petición del servidor. Las respuestas personales excluyen borradores, actividad y agendas ajenas. Los cambios de rol y la desactivación se aplican también a las sesiones abiertas. La migración añade las tablas y campos necesarios conservando escuelas, horarios y la cuenta inicial. La Escuela Demo mantiene el selector de perfiles ficticios sin contraseña.
