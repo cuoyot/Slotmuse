@@ -692,5 +692,6 @@
   "Periodo estival": "Període estival",
   "Motivo": "Motiu",
   "Configurar curso": "Configurar curs",
-  "Indica el motivo del periodo no lectivo.": "Indica el motiu del període no lectiu."
+  "Indica el motivo del periodo no lectivo.": "Indica el motiu del període no lectiu.",
+  "El aforo del espacio decide si participa el grupo completo o sus subgrupos. Se prioriza mantener la misma aula compatible.": "L’aforament de l’espai determina si hi participa el grup complet o els subgrups. Es prioritza mantenir la mateixa aula compatible."
 }
