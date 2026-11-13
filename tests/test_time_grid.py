@@ -45,6 +45,14 @@ class TimeGrid(unittest.TestCase):
         self.assertEqual(server.subject_hours(dict(weekly_hours=2.5,total_hours=10.5,session_minutes=60))['session_minutes'],60)
         for duration in [0,45,61,True,450]:
             with self.assertRaises(ValueError):server.subject_hours(dict(weekly_hours=2,total_hours=10,session_minutes=duration))
+    def test_weekly_sessions_derive_hours_and_required_weeks(self):
+        value=server.subject_hours(dict(session_minutes=60,weekly_sessions=3,total_hours=30))
+        self.assertEqual(value['weekly_hours'],3);self.assertEqual(value['required_weeks'],10)
+        value=server.subject_hours(dict(session_minutes=90,weekly_sessions=2,total_hours=31.5))
+        self.assertEqual(value['weekly_hours'],3);self.assertEqual(value['required_weeks'],11)
+        for count in [0,1.5,True,71]:
+            with self.assertRaises(ValueError):server.subject_hours(dict(session_minutes=60,weekly_sessions=count,total_hours=30))
+
     def test_legacy_migration_preserves_published_clock_times(self):
         with tempfile.TemporaryDirectory() as root,patch.object(server,'DB',Path(root)/'old.db'):
             with server.connect() as conn:
