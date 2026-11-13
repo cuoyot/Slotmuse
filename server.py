@@ -71,6 +71,7 @@ def get_catalog(conn):
         subject.setdefault('start','2026-09-14')
         subject.setdefault('end', {'law':'2027-01-29','procedure':'2027-03-26','swim':'2026-12-18'}.get(subject['id'],'2027-06-25'))
     for subject in cat['subjects']:
+        subject.setdefault('room_id',None)
         subject.setdefault('session_minutes',90)
         subject.setdefault('weekly_hours',subject['blocks']*1.5)
         subject.setdefault('total_hours',sum(active(subject,w) for w in season_weeks(cat))*subject['weekly_hours'])
@@ -95,6 +96,11 @@ def season_weeks(cat):
     end=dt.date.fromisoformat(season['end'])
     return [(first+dt.timedelta(days=7*i)).isoformat() for i in range((end-first).days//7+1)]
 
+def course_week(cat,week):
+    weeks=season_weeks(cat)
+    return min(max(week,weeks[0]),weeks[-1])
+
+
 def season_summary(conn,cat,user):
     stored={w:json.loads(raw) for w,raw in conn.execute('SELECT week,data FROM weeks')}
     rows=[]
@@ -114,12 +120,26 @@ def participants(session, cat):
         if session['audience'] in group['subgroups']: return {session['audience']}
     raise ValueError('Grupo o subgrupo desconocido.')
 
+def audiences_for(subject,group,cat,week=None):
+    if subject['scope']=='subgroup':return group['subgroups']
+    rooms=[r for r in cat['rooms'] if r['kind']==subject['kind'] and (not subject.get('room_id') or r['id']==subject['room_id'])]
+    full=[r for r in rooms if r['capacity']>=group['size']]
+    if not week:return [group['id']] if full else group['subgroups']
+    duration=min(subject.get('session_minutes',90),subject_week_minutes(subject,cat,week) or subject.get('session_minutes',90))
+    def usable(room):return any(active(subject,week,d) and teaching_day(cat,(dt.date.fromisoformat(week)+dt.timedelta(days=d)).isoformat()) and room_available(room,week,d,slot,duration) for d in range(5) for slot in range(len(SLOTS)))
+    if any(usable(r) for r in full):return [group['id']]
+    # Un cierre total no cambia por sí solo la estructura de alumnos requerida.
+    subgroup_size=(group['size']+len(group['subgroups'])-1)//len(group['subgroups'])
+    if full and not any(r['capacity']>=subgroup_size and usable(r) for r in rooms):return [group['id']]
+    return group['subgroups']
+
+
 def ensure_pending_teachers(cat):
     # Una reserva por audiencia evita que un puesto pendiente bloquee otro simultáneo.
     for subject in cat['subjects']:
         if any(not t['placeholder'] and subject['id'] in t['subjects'] for t in cat['teachers']):continue
         for group in cat['groups']:
-            for audience in ([group['id']] if subject['scope']=='group' else group['subgroups']):
+            for audience in [group['id']]+group['subgroups']:
                 teacher_id='pending-'+subject['id']+'-'+audience
                 if any(t['id']==teacher_id for t in cat['teachers']):continue
                 cat['teachers'].append(dict(id=teacher_id,name='Pendiente de asignar · '+subject['name'],subjects=[subject['id']],days=[0,1,2,3,4],placeholder=True,automatic=True,audience=audience,max_daily=14,max_weekly=70))
@@ -165,6 +185,13 @@ def room_available(room,week,day,slot,duration=90,start_minute=None):
 def room_conflicts(sessions,cat,week):
     rooms={r['id']:r for r in cat['rooms']}
     bad=[s for s in sessions if not teaching_day(cat,(dt.date.fromisoformat(week)+dt.timedelta(days=s['day'])).isoformat()) or (s['room'] in rooms and not room_available(rooms[s['room']],week,s['day'],s['slot'],session_duration(s,cat),session_start(s)))]
+    for session in sessions:
+        subject=next((s for s in cat['subjects'] if s['id']==session['subject']),None)
+        group=next((g for g in cat['groups'] if session['audience']==g['id'] or session['audience'] in g['subgroups']),None)
+        room=rooms.get(session['room'])
+        if subject and group and room:
+            size=group['size'] if session['audience']==group['id'] else (group['size']+len(group['subgroups'])-1)//len(group['subgroups'])
+            if (room['capacity']<size or session['audience'] not in audiences_for(subject,group,cat,week)) and session not in bad:bad.append(session)
     counts={}
     for session in sessions:
         key=(session['subject'],session['audience']);counts[key]=counts.get(key,0)+session_duration(session,cat)
@@ -204,9 +231,9 @@ def validate(sessions, cat, week=None,allow_partial=False):
         size=group['size'] if len(people)>1 else (group['size']+len(group['subgroups'])-1)//len(group['subgroups'])
         if week and not teaching_day(cat,(dt.date.fromisoformat(week)+dt.timedelta(days=s['day'])).isoformat()):errors.append(f'{tag}: día no lectivo.')
         if week and not active(subject,week,s['day']): errors.append(f'{tag}: materia fuera de su periodo de impartición.')
-        if subject['scope']=='subgroup' and len(people)!=1: errors.append(f'{tag}: la práctica requiere un subgrupo.')
-        if subject['scope']=='group' and len(people)!=len(group['subgroups']): errors.append(f'{tag}: la teoría requiere el grupo completo.')
+        if s['audience'] not in audiences_for(subject,group,cat,week):errors.append(f'{tag}: el aforo requiere otra distribución de grupos o subgrupos.')
         if not room_available(room,week,s['day'],s['slot'],duration,start):errors.append(f'{tag}: espacio fuera de su disponibilidad horaria.')
+        if subject.get('room_id') and s['room']!=subject['room_id']:errors.append(f'{tag}: la materia requiere otro espacio concreto.')
         if room['kind']!=subject['kind'] or room['capacity']<size: errors.append(f'{tag}: espacio incompatible o aforo insuficiente.')
         if subject['id'] not in teacher['subjects']: errors.append(f'{tag}: docente sin habilitación para esta materia.')
         if s['day'] not in teacher['days']: errors.append(f'{tag}: docente no disponible este día.')
@@ -240,7 +267,7 @@ def validate(sessions, cat, week=None,allow_partial=False):
             if 'total_hours' not in sub:continue
             quota=subject_week_minutes(sub,cat,week)
             for group in cat['groups']:
-                for audience in ([group['id']] if sub['scope']=='group' else group['subgroups']):
+                for audience in audiences_for(sub,group,cat,week):
                     if sum(session_duration(s,cat) for s in sessions if s['subject']==sub['id'] and s['audience']==audience)>quota:
                         errors.append(sub['name']+': se supera la carga horaria prevista para esta semana.')
     return list(dict.fromkeys(errors))
@@ -286,7 +313,7 @@ def coverage_tasks(sessions,cat,week=None):
     for subject in cat['subjects']:
         quota=subject_week_minutes(subject,cat,week)
         for group in cat['groups']:
-            for audience in ([group['id']] if subject['scope']=='group' else group['subgroups']):
+            for audience in audiences_for(subject,group,cat,week):
                 done=sum(session_duration(s,cat) for s in sessions if s['subject']==subject['id'] and s['audience']==audience)
                 tasks.extend((subject['id'],audience,duration) for duration in split_minutes(max(0,quota-done),subject.get('session_minutes',90)))
     return tasks
@@ -303,9 +330,9 @@ def rotation_packs(tasks,cat):
     def group_of(audience):return next((g for g in cat['groups'] if audience in g['subgroups']),None)
     def locations(task):
         sub=next(s for s in cat['subjects'] if s['id']==task[0]);group=group_of(task[1])
-        if sub['scope']!='subgroup' or not group or sub.get('align_splits',True) is False:return set()
+        if not group or sub.get('align_splits',True) is False:return set()
         size=(group['size']+len(group['subgroups'])-1)//len(group['subgroups'])
-        return {r.get('location_id','main') for r in cat['rooms'] if r['kind']==sub['kind'] and r['capacity']>=size}
+        return {r.get('location_id','main') for r in cat['rooms'] if r['kind']==sub['kind'] and r['capacity']>=size and (not sub.get('room_id') or r['id']==sub['room_id'])}
     while remaining:
         first=remaining.pop(0);group=group_of(first[1]);common=locations(first);pack=[first]
         if common and group:
@@ -341,7 +368,7 @@ def generate(cat, existing=None, seed=1, week=None):
                             subject_id,audience,duration=pack[index];subject=next(s for s in cat['subjects'] if s['id']==subject_id)
                             teachers=sorted(cat['teachers'],key=lambda t:t['placeholder'])
                             for room in cat['rooms']:
-                                if room['kind']!=subject['kind'] or (location is not None and room.get('location_id','main')!=location) or not room_available(room,week,day,slot,duration):continue
+                                if room['kind']!=subject['kind'] or (subject.get('room_id') and room['id']!=subject['room_id']) or (location is not None and room.get('location_id','main')!=location) or not room_available(room,week,day,slot,duration):continue
                                 for teacher in teachers:
                                     if subject_id not in teacher['subjects'] or (teacher.get('automatic') and teacher.get('audience')!=audience):continue
                                     item=dict(id='s-'+os.urandom(6).hex(),subject=subject_id,audience=audience,day=day,slot=slot,start_minute=480+slot*30,duration_minutes=duration,room=room['id'],teacher=teacher['id'],locked=False)
@@ -416,7 +443,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if not user: return self.send_json({'error':'Perfil demo desconocido.'},403)
                 week=monday(parse_qs(url.query).get('week',[None])[0])
                 with connect() as conn:
-                    cat=get_catalog(conn); data=load_week(conn,week,cat)
+                    cat=get_catalog(conn); week=course_week(cat,week); data=load_week(conn,week,cat)
                     summary=season_summary(conn,cat,user)
                 data['missing']=coverage(data['sessions'],cat,week)
                 if user['role']=='student':
@@ -438,7 +465,7 @@ class Handler(SimpleHTTPRequestHandler):
             week=monday(body.get('week')); action=urlparse(self.path).path
             with connect() as conn:
                 conn.execute('BEGIN IMMEDIATE')
-                cat=get_catalog(conn); data=load_week(conn,week,cat)
+                cat=get_catalog(conn); week=course_week(cat,week); data=load_week(conn,week,cat)
                 if body.get('revision')!=data['revision']: return self.send_json({'error':'Otro usuario ha cambiado esta semana. Recarga antes de guardar.'},409)
                 if action=='/api/assign':
                     session=next((s for s in data['sessions'] if s['id']==body.get('id')),None)
@@ -478,7 +505,28 @@ class Handler(SimpleHTTPRequestHandler):
                     if start>end or (end-start).days>550: raise ValueError('La temporada debe durar entre 1 y 551 días.')
                     name=str(body.get('name','')).strip()[:80]
                     if not name: raise ValueError('Indica el nombre de la temporada.')
+                    prior_cat=copy.deepcopy(cat)
                     cat['season']=dict(name=name,start=start.isoformat(),end=end.isoformat())
+                    if 'non_teaching_days' in body:
+                        periods=body['non_teaching_days']
+                        if not isinstance(periods,list) or len(periods)>100:raise ValueError('Indica hasta 100 periodos no lectivos.')
+                        clean=[]
+                        for item in periods:
+                            a=dt.date.fromisoformat(item['start']);b=dt.date.fromisoformat(item['end'])
+                            if a>b or (b-a).days>550:raise ValueError('Periodo no lectivo no válido.')
+                            label=str(item.get('name','')).strip()[:100]
+                            if not label:raise ValueError('Indica el motivo del periodo no lectivo.')
+                            clean.append(dict(id=item.get('id') or os.urandom(6).hex(),name=label,start=a.isoformat(),end=b.isoformat(),enabled=item.get('enabled',True) is True))
+                        cat['non_teaching_days']=clean
+                    for target,raw in conn.execute('SELECT week,data FROM weeks').fetchall():
+                        current=data if target==week else json.loads(raw)
+                        if room_conflicts(current['sessions'],cat,target) or coverage(current['sessions'],cat,target)!=coverage(current['sessions'],prior_cat,target):
+                            current['sessions'],current['missing']=repair_sessions(current,cat,target)
+                            current['revision']+=1
+                            current['updated']=dt.datetime.now().isoformat(timespec='seconds')
+                            current['history'].insert(0,dict(at=current['updated'],user=user['name'],message='Curso y periodos no lectivos: borrador reajustado'))
+                            if target!=week:save_week(conn,target,current)
+                    cat['revision']=cat.get('revision',1)+1
                     conn.execute('UPDATE settings SET data=? WHERE id=1',(json.dumps(cat,ensure_ascii=False),))
                     message='Temporada actualizada; revisa los periodos de las materias'
                 elif action=='/api/season-generate':
@@ -503,7 +551,10 @@ class Handler(SimpleHTTPRequestHandler):
                     proposed={**sub,**body,'start':start.isoformat(),'end':end.isoformat()}
                     if 'weekly_sessions' not in body:proposed.pop('weekly_sessions',None)
                     if 'weekly_sessions' not in body and 'weekly_hours' not in body:proposed['weekly_hours']=body['blocks']*1.5
-                    sub.update(start=start.isoformat(),end=end.isoformat(),**subject_hours(proposed,cat))
+                    room_id=proposed.get('room_id') or None
+                    if room_id and not any(r['id']==room_id and r['kind']==sub['kind'] for r in cat['rooms']):raise ValueError('Selecciona un espacio compatible con la materia.')
+                    sub.update(start=start.isoformat(),end=end.isoformat(),room_id=room_id,**subject_hours(proposed,cat))
+                    cat['revision']=cat.get('revision',1)+1
                     conn.execute('UPDATE settings SET data=? WHERE id=1',(json.dumps(cat,ensure_ascii=False),))
                     # Las fechas son globales: limpiar borradores, nunca versiones publicadas.
                     removed=0
