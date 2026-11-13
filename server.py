@@ -46,11 +46,16 @@ def connect():
 
 def get_catalog(conn):
     cat=json.loads(conn.execute('SELECT data FROM settings WHERE id=1').fetchone()[0])
+    original=copy.deepcopy(cat)
     # Compatibilidad con las bases de datos iniciales de la demo.
     cat.setdefault('season',dict(name='Promoción 2026 / 2027',start='2026-09-14',end='2027-06-25'))
     for subject in cat['subjects']:
         subject.setdefault('start','2026-09-14')
         subject.setdefault('end', {'law':'2027-01-29','procedure':'2027-03-26','swim':'2026-12-18'}.get(subject['id'],'2027-06-25'))
+    for subject in cat['subjects']:
+        subject.setdefault('weekly_hours',subject['blocks']*1.5)
+        subject.setdefault('total_hours',sum(active(subject,w) for w in season_weeks(cat))*subject['weekly_hours'])
+    if cat!=original:conn.execute('UPDATE settings SET data=? WHERE id=1',(json.dumps(cat,ensure_ascii=False),))
     return cat
 
 def active(subject,week,day=None):
@@ -116,7 +121,41 @@ def validate(sessions, cat, week=None):
             try:
                 if people & participants(other,cat): errors.append(f'{tag}: cruce de alumnos (grupo/subgrupo).')
             except ValueError: pass
+    if week:
+        for sub in cat['subjects']:
+            if 'total_hours' not in sub:continue
+            quota=subject_blocks(sub,cat,week)
+            for group in cat['groups']:
+                for audience in ([group['id']] if sub['scope']=='group' else group['subgroups']):
+                    if sum(s['subject']==sub['id'] and s['audience']==audience for s in sessions)>quota:
+                        errors.append(sub['name']+': se supera la carga horaria prevista para esta semana.')
     return list(dict.fromkeys(errors))
+
+def subject_hours(item,cat=None):
+    """Horas por alumno; las sesiones actuales tienen una duración fija de 90 min."""
+    weekly=item.get('weekly_hours',item.get('blocks',1)*1.5)
+    total=item.get('total_hours')
+    for value,label in [(weekly,'Horas semanales'),(total,'Horas totales')]:
+        if value is None and label=='Horas totales':continue
+        if type(value) not in (int,float) or not 0<value<=10000 or abs(value/1.5-round(value/1.5))>1e-8:
+            raise ValueError(label+': indica un múltiplo positivo de 1,5 horas (sesiones de 90 minutos).')
+    if weekly>15:raise ValueError('Las horas semanales no pueden superar 15 horas.')
+    if total is None:
+        total=sum(active(item,w) for w in season_weeks(cat))*weekly if cat else weekly
+    if total<=0:raise ValueError('El periodo debe incluir al menos una semana de formación.')
+    return dict(weekly_hours=weekly,total_hours=total,blocks=round(weekly/1.5))
+
+
+def subject_blocks(subject,cat,week=None):
+    weekly=round(subject.get('weekly_hours',subject['blocks']*1.5)/1.5)
+    if week and not active(subject,week):return 0
+    if 'total_hours' not in subject:return weekly
+    weeks=[w for w in season_weeks(cat) if active(subject,w)]
+    if week is None:return weekly
+    if week not in weeks:return 0
+    remaining=round(subject['total_hours']/1.5)-weeks.index(week)*weekly
+    return max(0,min(weekly,remaining))
+
 
 def requirements(cat,week=None):
     result=[]
@@ -124,7 +163,7 @@ def requirements(cat,week=None):
         if week and not active(subject,week): continue
         for group in cat['groups']:
             for audience in ([group['id']] if subject['scope']=='group' else group['subgroups']):
-                for _ in range(subject['blocks']): result.append((subject['id'],audience))
+                for _ in range(subject_blocks(subject,cat,week)): result.append((subject['id'],audience))
     return result
 
 def coverage(sessions,cat,week=None):
@@ -281,14 +320,23 @@ class Handler(SimpleHTTPRequestHandler):
                     if not sub: raise ValueError('Materia no encontrada.')
                     start=dt.date.fromisoformat(body['start']); end=dt.date.fromisoformat(body['end'])
                     if start>end: raise ValueError('La fecha de fin debe ser igual o posterior al inicio.')
-                    if type(body.get('blocks')) is not int or not 1<=body['blocks']<=10: raise ValueError('Indica entre 1 y 10 bloques semanales.')
-                    sub.update(start=start.isoformat(),end=end.isoformat(),blocks=body['blocks'])
+                    if 'weekly_hours' not in body and (type(body.get('blocks')) is not int or not 1<=body['blocks']<=10): raise ValueError('Indica entre 1 y 10 bloques semanales.')
+                    proposed={**sub,**body,'start':start.isoformat(),'end':end.isoformat()}
+                    if 'weekly_hours' not in body:proposed['weekly_hours']=body['blocks']*1.5
+                    sub.update(start=start.isoformat(),end=end.isoformat(),**subject_hours(proposed,cat))
                     conn.execute('UPDATE settings SET data=? WHERE id=1',(json.dumps(cat,ensure_ascii=False),))
                     # Las fechas son globales: limpiar borradores, nunca versiones publicadas.
                     removed=0
                     for other_week,raw in conn.execute('SELECT week,data FROM weeks').fetchall():
                         other=data if other_week==week else json.loads(raw)
                         kept=[s for s in other['sessions'] if s['subject']!=sub['id'] or active(sub,other_week,s['day'])]
+                        quota=subject_blocks(sub,cat,other_week);counts={};trimmed=[]
+                        for session in kept:
+                            if session['subject']==sub['id']:
+                                audience=session['audience'];counts[audience]=counts.get(audience,0)+1
+                                if counts[audience]>quota:continue
+                            trimmed.append(session)
+                        kept=trimmed
                         count=len(other['sessions'])-len(kept); removed+=count
                         if count:
                             other['sessions']=kept
