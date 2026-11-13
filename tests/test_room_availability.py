@@ -98,6 +98,17 @@ class AvailabilityAPI(unittest.TestCase):
         self.assertEqual(self.add(other,'rooms',dict(name='Ajena',kind=kind['id'],capacity=24))[0],400)
         self.assertEqual(self.add(school,'locations',dict(name='centro de tiro'))[0],400)
 
+    def test_new_subject_accepts_sessions_per_week_and_reports_derived_load(self):
+        self.login();school=self.create()
+        self.assertEqual(self.add(school,'subjects',dict(name='Derecho',kind='theory',scope='group',session_minutes=60,weekly_sessions=3,total_hours=30,start='2026-11-09',end='2027-01-29',color='blue'))[0],200)
+        subject=self.state(school)['catalog']['subjects'][0]
+        self.assertEqual(subject['weekly_sessions'],3);self.assertEqual(subject['weekly_hours'],3);self.assertEqual(subject['required_weeks'],10)
+        state=self.state(school)
+        status,result=self.call('subject',dict(id=subject['id'],week=state['week'],revision=state['data']['revision'],session_minutes=90,weekly_sessions=2,total_hours=30,start=subject['start'],end=subject['end']),school=school)
+        self.assertEqual(status,200,result)
+        updated=self.state(school)['catalog']['subjects'][0]
+        self.assertEqual(updated['session_minutes'],90);self.assertEqual(updated['weekly_sessions'],2);self.assertEqual(updated['weekly_hours'],3)
+
     def test_permissions_and_invalid_windows(self):
         self.prepare();body=self.payload()
         for windows in [[dict(day=5,start='08:00',end='13:00')],[dict(day=0,start='13:00',end='08:00')],[dict(day=0,start='8:00',end='13:00')]]:
