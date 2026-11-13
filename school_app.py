@@ -143,11 +143,11 @@ def readiness(cat):
     for key,label in [('groups','grupos'),('rooms','espacios'),('subjects','materias')]:
         if not cat[key]: issues.append('Añade '+label+'.')
     for sub in cat['subjects']:
-        if not any(r['kind']==sub['kind'] for r in cat['rooms']): issues.append('Falta un espacio compatible para '+sub['name']+'.')
+        if not any(r['kind']==sub['kind'] and (not sub.get('room_id') or r['id']==sub['room_id']) for r in cat['rooms']): issues.append('Falta un espacio compatible para '+sub['name']+'.')
         for group in cat['groups']:
-            size=group['size'] if sub['scope']=='group' else (group['size']+len(group['subgroups'])-1)//len(group['subgroups'])
-            if not any(r['kind']==sub['kind'] and r['capacity']>=size for r in cat['rooms']):
-                issues.append(f"Falta aforo para {sub['name']} / {group['name']}.")
+            size=group['size'] if server.audiences_for(sub,group,cat)==[group['id']] else (group['size']+len(group['subgroups'])-1)//len(group['subgroups'])
+            if not any(r['kind']==sub['kind'] and r['capacity']>=size and (not sub.get('room_id') or r['id']==sub['room_id']) for r in cat['rooms']):
+                issues.append(f"{sub['name']} / {group['name']}: el subgrupo de {size} alumnos no cabe; divide el grupo en más subgrupos o elige un espacio de mayor aforo.")
     for sub in cat['subjects']:
         capacity=sum(server.teaching_week(sub,cat,w) for w in server.season_weeks(cat))*sub.get('weekly_hours',sub['blocks']*1.5)
         if sub.get('total_hours',0)>capacity:issues.append('Las horas totales de '+sub['name']+' no caben en su periodo con la carga semanal indicada.')
@@ -164,6 +164,7 @@ class Handler(server.Handler):
     def send_json(self,value,status=200):
         if isinstance(value,dict) and 'catalog' in value and hasattr(self,'current_school'):
             school=self.current_school
+            value['subject_audiences']={s['id']:[a for g in value['catalog']['groups'] for a in server.audiences_for(s,g,value['catalog'],value.get('week'))] for s in value['catalog']['subjects']}
             value['school']=dict(school)
             if not school['is_demo']:
                 value['user']=dict(self.member)
@@ -238,6 +239,7 @@ class Handler(server.Handler):
             return user['subgroup'] in server.participants(s,cat) if user['role']=='student' else s['teacher']==user['teacher_id']
         with server.connect() as conn:
             cat=server.get_catalog(conn)
+            week=server.course_week(cat,week)
             stored={w:json.loads(raw) for w,raw in conn.execute('SELECT week,data FROM weeks')}
         published=stored.get(week,{}).get('published')
         sessions=[s for s in published['sessions'] if own(s,cat)] if published else []
@@ -531,7 +533,9 @@ class Handler(server.Handler):
                         # Conservar identificadores históricos al editar el tamaño/nombre.
                         if existing and len(existing['subgroups'])==count:clean['subgroups']=existing['subgroups']
                     elif collection=='subjects':
-                        if item.get('scope') not in ['group','subgroup']:raise ValueError('Formato de grupo no válido.')
+                        clean['room_id']=item.get('room_id') or None
+                        if clean['room_id'] and not any(r['id']==clean['room_id'] and r['kind']==clean['kind'] for r in cat['rooms']):raise ValueError('Selecciona un espacio compatible con la materia.')
+                        if item.get('scope') not in ['auto','group','subgroup']:raise ValueError('Formato de grupo no válido.')
                         clean.update(scope=item['scope'],color=item.get('color','blue'),**period(item))
                         clean.update(server.subject_hours({**item,**clean},cat))
                         if clean['color'] not in COLORS:raise ValueError('Color no válido.')
@@ -551,11 +555,11 @@ class Handler(server.Handler):
                 # No invalidar silenciosamente semanas ya configuradas.
                 for week,raw in conn.execute('SELECT week,data FROM weeks').fetchall():
                     stored=json.loads(raw)
-                    if collection=='non_teaching_days' and (server.room_conflicts(stored['sessions'],cat,week) or server.coverage(stored['sessions'],cat,week)!=server.coverage(stored['sessions'],prior_cat,week)):
+                    if collection in ['non_teaching_days','rooms','subjects'] and (server.room_conflicts(stored['sessions'],cat,week) or server.coverage(stored['sessions'],cat,week)!=server.coverage(stored['sessions'],prior_cat,week)):
                         stored['sessions'],remaining=server.repair_sessions(stored,cat,week)
                         stored['missing']=remaining;missing_total+=len(remaining);repaired+=1
                         stored['revision']+=1;stored['updated']=dt.datetime.now().isoformat(timespec='seconds')
-                        stored['history'].insert(0,dict(at=stored['updated'],user=self.member['name'],message='Calendario escolar: borrador reajustado'))
+                        stored['history'].insert(0,dict(at=stored['updated'],user=self.member['name'],message='Recursos o calendario escolar: borrador reajustado'))
                         conn.execute('UPDATE weeks SET data=? WHERE week=?',(json.dumps(stored,ensure_ascii=False),week))
                     errors=server.validate(stored['sessions'],cat,week)
                     previous=list(prior_errors.get(week,[]))
