@@ -60,6 +60,14 @@ class TimeGrid(unittest.TestCase):
         sessions[0]['room']='aula1'
         self.assertTrue(any('espacio concreto' in e for e in server.validate(sessions,cat,'2026-11-09')))
 
+    def test_room_affinity_prefers_reusing_the_same_room_when_feasible(self):
+        cat=self.catalog();sessions,missing=server.generate(cat,week='2026-11-09')
+        self.assertEqual(missing,[])
+        for group in cat['groups']:
+            self.assertEqual(len({s['room'] for s in sessions if s['audience']==group['id']}),1)
+        assigned=[s for s in sessions if s['audience']=='A'];same=dict(assigned[0]);other={**same,'room':'aula2' if same['room']=='aula1' else 'aula1'}
+        self.assertLess(server.room_affinity_cost([same],assigned,cat),server.room_affinity_cost([other],assigned,cat))
+
     def test_legacy_migration_preserves_published_clock_times(self):
         with tempfile.TemporaryDirectory() as root,patch.object(server,'DB',Path(root)/'old.db'):
             with server.connect() as conn:
