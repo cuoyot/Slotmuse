@@ -53,6 +53,13 @@ class TimeGrid(unittest.TestCase):
         for count in [0,1.5,True,71]:
             with self.assertRaises(ValueError):server.subject_hours(dict(session_minutes=60,weekly_sessions=count,total_hours=30))
 
+    def test_subject_can_require_one_specific_room(self):
+        cat=self.catalog();cat['subjects'][0]['room_id']='aula2'
+        sessions,missing=server.generate(cat,week='2026-11-09');self.assertEqual(missing,[])
+        self.assertTrue(all(s['room']=='aula2' for s in sessions))
+        sessions[0]['room']='aula1'
+        self.assertTrue(any('espacio concreto' in e for e in server.validate(sessions,cat,'2026-11-09')))
+
     def test_legacy_migration_preserves_published_clock_times(self):
         with tempfile.TemporaryDirectory() as root,patch.object(server,'DB',Path(root)/'old.db'):
             with server.connect() as conn:
