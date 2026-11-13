@@ -149,6 +149,9 @@ def readiness(cat):
             size=group['size'] if sub['scope']=='group' else (group['size']+len(group['subgroups'])-1)//len(group['subgroups'])
             if not any(r['kind']==sub['kind'] and r['capacity']>=size for r in cat['rooms']):
                 issues.append(f"Falta aforo para {sub['name']} / {group['name']}.")
+    for sub in cat['subjects']:
+        capacity=sum(server.active(sub,w) for w in server.season_weeks(cat))*sub.get('weekly_hours',sub['blocks']*1.5)
+        if sub.get('total_hours',0)>capacity:issues.append('Las horas totales de '+sub['name']+' no caben en su periodo con la carga semanal indicada.')
     return list(dict.fromkeys(issues))
 
 
@@ -445,7 +448,8 @@ class Handler(server.Handler):
                     if existing and len(existing['subgroups'])==count:clean['subgroups']=existing['subgroups']
                 elif collection=='subjects':
                     if item.get('scope') not in ['group','subgroup']:raise ValueError('Formato de grupo no válido.')
-                    clean.update(scope=item['scope'],blocks=number(item.get('blocks'),'Bloques semanales',1,10),color=item.get('color','blue'),**period(item))
+                    clean.update(scope=item['scope'],color=item.get('color','blue'),**period(item))
+                    clean.update(server.subject_hours({**item,**clean},cat))
                     if clean['color'] not in COLORS:raise ValueError('Color no válido.')
                 elif collection=='teachers':
                     subjects=item.get('subjects');days=item.get('days')
